@@ -1,0 +1,10 @@
+{
+  "ticker": "BTC-USD",
+  "timeframe": "5m",
+  "fast": 12,
+  "slow": 26,
+  "signal": 9,
+  "history_period": "30d",
+  "smtp_host": "smtp.gmail.com",
+  "smtp_port": 465
+}
