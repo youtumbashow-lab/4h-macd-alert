@@ -20,12 +20,9 @@ MACD Alert Bot
 Настройки — в config.json (рядом со скриптом):
   {
     "ticker": "BTC-USD",
-    "timeframe": "5m",
+    "timeframe": "4h",
     "macd_fast": 12,
-    "macd_slow": 26,
-    "macd_signal": 9,
-    "signal_green_min": 190,
-    "signal_red_max": -160
+    "macd_slow": 26
   }
 
 Переменные окружения: EMAIL_TO, EMAIL_USER, EMAIL_APP_PASSWORD (пароль приложения Gmail).
