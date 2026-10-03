@@ -14,7 +14,8 @@ MACD Alert Bot (multi-ticker, кастомные ТФ через ресемпл�
 Особенности:
   - несколько тикеров (массив в config.json), по каждому независимый анализ;
   - ТФ 4h получается ресемплингом часовых свечей (yfinance не отдаёт 4h);
-  - незакрытая свеча отбрасывается — сигнал не перерисуется;
+  - анализ идёт за LEAD_MINUTES минут до закрытия свечи (ранний сигнал);
+    после закрытия свечи повторной отправки не будет (дедупликация);
   - дедупликация на тикер через state.json (ключ: "TICKER_TF");
   - источник данных — Yahoo Finance (yfinance).
 
@@ -51,6 +52,9 @@ STATE_PATH = BASE_DIR / "state.json"
 SIGNAL_LEN = 9          # длина сигнальной линии MACD
 SIGNAL_GREEN_MIN = 190.0   # signal(9) >= 190  для GREEN
 SIGNAL_RED_MAX = -160.0    # signal(9) <= -160 для RED
+
+# анализируем свечу, когда до её закрытия осталось <= LEAD_MINUTES минут
+LEAD_MINUTES = 7
 # =======================================================
 
 # длительность таймфрейма в секундах
@@ -187,16 +191,29 @@ def resample_to_tf(df: pd.DataFrame, timeframe: str) -> pd.DataFrame:
     return out
 
 
-def drop_unclosed(df: pd.DataFrame, timeframe: str) -> pd.DataFrame:
-    """Если последняя свеча ещё не закрылась (по времени), отбрасываем её."""
+def prepare_candle(df: pd.DataFrame, timeframe: str):
+    """Выбираем свечу для анализа.
+
+    - свеча уже закрылась        -> анализируем её как есть;
+    - до закрытия <= LEAD_MINUTES -> анализируем ФОРМИРУЮЩУЮСЯ свечу
+      (сигнал приходит на 5-7 минут раньше, риск перерисовки принят);
+    - до закрытия больше        -> рано, тикер пропускаем.
+
+    Возвращает DataFrame или None (пропуск)."""
     tf = pd.Timedelta(seconds=TF_SECONDS[timeframe])
     last_open = df.index[-1]
     if last_open.tzinfo is None:
         last_open = last_open.tz_localize("UTC")
     now = pd.Timestamp.now(tz="UTC")
-    if now < last_open + tf:
-        log(f"Последняя свеча ({timeframe}) ещё не закрылась — пропускаем её")
-        return df.iloc[:-1]
+    remaining_min = (last_open + tf - now).total_seconds() / 60.0
+    if remaining_min <= 0:
+        return df  # свеча закрыта
+    if remaining_min > LEAD_MINUTES:
+        log(f"До закрытия свечи ещё {remaining_min:.0f} мин "
+            f"(> {LEAD_MINUTES}) — рано, пропуск")
+        return None
+    log(f"До закрытия свечи {remaining_min:.1f} мин — "
+        f"анализируем формирующуюся")
     return df
 
 
@@ -242,7 +259,9 @@ def send_email(subject: str, body: str) -> None:
 def process_ticker(ticker: str, tf: str, fast: int, slow: int, state: dict) -> None:
     """Анализ одного тикера. Ошибки по одному тикеру не роняют остальные."""
     df = fetch_data(ticker, tf)
-    df = drop_unclosed(df, tf)
+    df = prepare_candle(df, tf)
+    if df is None:
+        return
 
     need = slow + SIGNAL_LEN + 5
     if len(df) < need:
@@ -264,7 +283,7 @@ def process_ticker(ticker: str, tf: str, fast: int, slow: int, state: dict) -> N
     hist_val = float(curr["hist"])
     sig_val = float(curr["signal"])
 
-    log(f"{ticker} {tf} | закрытая свеча {candle_time} | цена {price:.2f} | "
+    log(f"{ticker} {tf} | свеча {candle_time} | цена {price:.2f} | "
         f"signal({SIGNAL_LEN}) {sig_val:.2f} | hist {hist_val:.4f} | цвет: {c_curr}")
 
     # смена цвета (тёмная -> светлая) + фильтр по сигнальной линии
