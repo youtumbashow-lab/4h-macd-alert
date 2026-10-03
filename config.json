@@ -1,5 +1,5 @@
 {
-  "ticker": "BTC-USD", "ETH-USD",  "LINEA-USD", "LTC-USD", "MNT-USD", "ICP-USD", "TRUMP-USD", "APT-USD", "POL-USD", "FIL-USD", "DASH-USD", "ETC-USD", "ALGO-USD", "DOGE-USD", "ARB-USD", "AVAX-USD", "XRP-USD", "TRX-USD", "DOT-USD", "STRK-USD", "ADA-USD",
+  "ticker": "BTC-USD", "ETH-USD",  "LINEA-USD", "LTC-USD", "MNT-USD", "ICP-USD", "TRUMP-USD", "APT-USD", "POL-USD", "FIL-USD", "DASH-USD", "ETC-USD", "ALGO-USD", "DOGE-USD", "ARB-USD", "AVAX-USD", "XRP-USD", "TRX-USD", "DOT-USD", "STRK-USD", "ADA-USD"
   "timeframe": "4h",
   "fast": 12,
   "slow": 26,
