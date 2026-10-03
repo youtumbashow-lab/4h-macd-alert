@@ -1,0 +1,32 @@
+name: Test Email
+
+on:
+  workflow_dispatch: {}
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Отправка тестового письма
+        env:
+          EMAIL_TO: ${{ secrets.EMAIL_TO }}
+          EMAIL_USER: ${{ secrets.EMAIL_USER }}
+          EMAIL_APP_PASSWORD: ${{ secrets.EMAIL_APP_PASSWORD }}
+        run: |
+          python - <<'EOF'
+          import os, smtplib, ssl
+          from email.mime.text import MIMEText
+          from email.header import Header
+          msg = MIMEText("Если вы видите это письмо — отправка работает.", "plain", "utf-8")
+          msg["Subject"] = Header("MACD Alert: тест", "utf-8")
+          msg["From"] = os.environ["EMAIL_USER"]
+          msg["To"] = os.environ["EMAIL_TO"]
+          ctx = ssl.create_default_context()
+          with smtplib.SMTP_SSL("smtp.gmail.com", 465, context=ctx) as s:
+              s.login(os.environ["EMAIL_USER"], os.environ["EMAIL_APP_PASSWORD"])
+              s.send_message(msg)
+          print("Тестовое письмо отправлено")
+          EOF

@@ -1,1 +1,43 @@
+name: MACD Alert
 
+on:
+  schedule:
+    # cron в UTC. Для таймфрейма 1h — каждый час в :02 (после закрытия свечи).
+    # Примеры для других ТФ — в README.md
+    - cron: '*/5 * * * *'
+  workflow_dispatch: {}   # ручной запуск (кнопка "Run workflow" — удобно с телефона)
+
+permissions:
+  contents: write
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Установка зависимостей
+        run: pip install --quiet yfinance pandas
+
+      - name: Проверка MACD и отправка email
+        env:
+          EMAIL_TO: ${{ secrets.EMAIL_TO }}
+          EMAIL_USER: ${{ secrets.EMAIL_USER }}
+          EMAIL_APP_PASSWORD: ${{ secrets.EMAIL_APP_PASSWORD }}
+        run: python macd_alert.py
+
+      - name: Сохранить state.json в репозиторий
+        run: |
+          git config user.name "macd-bot"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if [ -f state.json ]; then
+            git add state.json
+            git diff --cached --quiet && echo "state не менялся" || {
+              git commit -m "state update [skip ci]"
+              git push
+            }
+          fi
