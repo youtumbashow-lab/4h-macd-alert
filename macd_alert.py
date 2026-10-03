@@ -19,7 +19,7 @@ MACD Alert Bot
 
 Настройки — в config.json (рядом со скриптом):
   {
-    "ticker": "BTC-USD",
+    "ticker": "BTC-USD", "ETH-USD",  "LINEA-USD", "LTC-USD", "MNT-USD", "ICP-USD", "TRUMP-USD", "APT-USD", "POL-USD", "FIL-USD", "DASH-USD", "ETC-USD", "ALGO-USD", "DOGE-USD", "ARB-USD", "AVAX-USD", "XRP-USD", "TRX-USD", "DOT-USD", "STRK-USD", "ADA-USD",
     "timeframe": "4h",
     "macd_fast": 12,
     "macd_slow": 26
