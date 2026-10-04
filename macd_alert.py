@@ -1,23 +1,25 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-MACD Alert Bot (multi-ticker, кастомные ТФ через ресемплинг)
-===========================================================
-Сигнал на последней ЗАКРЫТОЙ свече при ОДНОВРЕМЕННОМ выполнении двух условий:
+MACD Alert Bot (Bybit, multi-ticker, ранний сигнал)
+======================================================
+Данные — Bybit spot API v5 (публичные klines, без ключа).
 
-  GREEN: смена тёмно-зелёной -> светлозелёной  (hist > 0: рост сменился падением)
-         И сигнальная линия signal (период 9) >= 190
+Сигнал на свече за LEAD_MINUTES минут до её закрытия при ОДНОВРЕМЕННОМ
+выполнении условий:
 
-  RED:   смена тёмно-красной -> светло-красной  (hist < 0: падение сменилось ростом)
-         И сигнальная линия signal (период 9) <= -160
+  GREEN: смена тёмно-зелёной -> светлозелёной (hist > 0: рост сменился падением)
+         БЕЗ всяких фильтров по signal
+
+  RED:   смена тёмно-красной -> светло-красной (hist < 0: падение сменилось ростом)
+         И signal(9) < 0
 
 Особенности:
   - несколько тикеров (массив в config.json), по каждому независимый анализ;
-  - ТФ 4h получается ресемплингом часовых свечей (yfinance не отдаёт 4h);
-  - анализ идёт за LEAD_MINUTES минут до закрытия свечи (ранний сигнал);
-    после закрытия свечи повторной отправки не будет (дедупликация);
-  - дедупликация на тикер через state.json (ключ: "TICKER_TF");
-  - источник данных — Yahoo Finance (yfinance).
+  - ТФ напрямую из конфига (Bybit поддерживает 4h нативно, интервал 240);
+  - анализ за LEAD_MINUTES минут до закрытия; после закрытия повтора не будет
+    (дедупликация по "TICKER_TF" -> время свечи в state.json);
+  - ошибка по одному тикеру не роняет остальные.
 
 config.json:
   {
@@ -42,43 +44,33 @@ from email.mime.text import MIMEText
 from pathlib import Path
 
 import pandas as pd
-import yfinance as yf
+import requests
 
 BASE_DIR = Path(__file__).resolve().parent
 CONFIG_PATH = BASE_DIR / "config.json"
 STATE_PATH = BASE_DIR / "state.json"
 
-# ==== ПАРАМЕТРЫ СИГНАЛА (намертво, не в config.json) ====
-SIGNAL_LEN = 9          # длина сигнальной линии MACD
-SIGNAL_GREEN_MIN = 190.0   # signal(9) >= 190  для GREEN
-SIGNAL_RED_MAX = -160.0    # signal(9) <= -160 для RED
+BYBIT_KLINE_URL = "https://api.bybit.com/v5/market/kline"
+KLINES_LIMIT = 500  # свечей на запрос (хватит для MACD 26+9+запас)
+
+# таймфрейм -> интервал Bybit (в минутах; D/W - дни/недели)
+BYBIT_INTERVAL = {
+    "1m": "1", "3m": "3", "5m": "5", "15m": "15", "30m": "30",
+    "1h": "60", "2h": "120", "4h": "240", "6h": "360", "12h": "720",
+    "1d": "D", "1w": "W",
+}
+
+# длина сигнальной линии MACD
+SIGNAL_LEN = 9
 
 # анализируем свечу, когда до её закрытия осталось <= LEAD_MINUTES минут
 LEAD_MINUTES = 7
-# =======================================================
 
-# длительность таймфрейма в секундах
+# длительность таймфрейма в секундах (для подстраховки таймингов)
 TF_SECONDS = {
-    "1m": 60, "2m": 120, "5m": 300, "15m": 900, "30m": 1800,
-    "60m": 3600, "90m": 5400, "1h": 3600, "2h": 7200, "4h": 14400,
-    "6h": 21600, "8h": 28800, "12h": 43200, "1d": 86400,
-    "3d": 259200, "1w": 604800,
-}
-
-# какой интервал реально запрашивать у Yahoo под каждый ТФ
-# (yfinance не поддерживает 2h/4h/6h/8h/12h -> берём 1h и ресемплим)
-SOURCE_INTERVAL = {
-    "1m": "1m", "2m": "2m", "5m": "5m", "15m": "15m", "30m": "30m",
-    "60m": "60m", "90m": "90m", "1h": "1h",
-    "2h": "1h", "4h": "1h", "6h": "1h", "8h": "1h", "12h": "1h",
-    "1d": "1d", "3d": "1d", "1w": "1wk",
-}
-
-# сколько истории запрашивать у Yahoo под каждый ТФ
-PERIOD_BY_TF = {
-    "1m": "1d", "2m": "5d", "5m": "5d", "15m": "1mo", "30m": "1mo",
-    "60m": "1mo", "90m": "3mo", "1h": "1mo", "2h": "3mo", "4h": "3mo",
-    "6h": "3mo", "8h": "6mo", "12h": "6mo", "1d": "1y", "3d": "1y", "1w": "2y",
+    "1m": 60, "3m": 180, "5m": 300, "15m": 900, "30m": 1800,
+    "1h": 3600, "2h": 7200, "4h": 14400, "6h": 21600, "8h": 28800,
+    "12h": 43200, "1d": 86400, "3d": 259200, "1w": 604800,
 }
 
 COLOR_NAMES = {
@@ -104,10 +96,21 @@ def load_config() -> dict:
         fail(f"Не найден config.json рядом со скриптом ({CONFIG_PATH})")
     with open(CONFIG_PATH, encoding="utf-8") as f:
         cfg = json.load(f)
-    tf = str(cfg.get("timeframe", "1h"))
+    tf = str(cfg.get("timeframe", "4h"))
     if tf not in TF_SECONDS:
         fail(f"Неизвестный timeframe '{tf}'. Допустимые: {', '.join(TF_SECONDS)}")
     return cfg
+
+
+def to_bybit_symbol(ticker: str) -> str:
+    """'BTC-USD' -> 'BTCUSDT', 'ETH-USDT' -> 'ETHUSDT', 'SOL' -> 'SOLUSDT'."""
+    t = ticker.strip().upper()
+    if t.endswith("-USD"):
+        return t[:-4] + "USDT"
+    t = t.replace("-", "").replace("/", "")
+    if t.endswith(("USDT", "USDC", "BTC", "ETH")):
+        return t
+    return t + "USDT"
 
 
 def load_state() -> dict:
@@ -155,65 +158,60 @@ def commit_state_to_repo() -> None:
 
 
 def fetch_data(ticker: str, timeframe: str) -> pd.DataFrame:
-    """Загружает свечи. Для ТФ, которых нет в yfinance (2h/4h/...),
-    качает 1h и ресемплирует до нужного ТФ."""
-    period = PERIOD_BY_TF.get(timeframe, "1mo")
-    src = SOURCE_INTERVAL.get(timeframe, timeframe)
-    log(f"Загрузка {ticker} {timeframe} (период {period}, источник {src})...")
-    df = yf.download(ticker, period=period, interval=src,
-                     progress=False, auto_adjust=False)
-    if df is None or df.empty:
-        raise RuntimeError(f"Нет данных по {ticker} ({timeframe}) — проверьте тикер")
-    if isinstance(df.columns, pd.MultiIndex):  # новые версии yfinance
-        df.columns = df.columns.get_level_values(0)
-    # приводим индекс к UTC — иначе ресемплинг и drop_unclosed работают
-    # в разных часовых поясах
-    if df.index.tzinfo is None:
-        df.index = df.index.tz_localize("UTC")
-    else:
-        df.index = df.index.tz_convert("UTC")
-    if src != timeframe:
-        df = resample_to_tf(df, timeframe)
-    return df
-
-
-def resample_to_tf(df: pd.DataFrame, timeframe: str) -> pd.DataFrame:
-    """Ресемплинг младших свечей (например 1h) в старший ТФ (например 4h).
-    Бары привязаны к 00:00 UTC, как на TradingView для крипты."""
-    tf = pd.Timedelta(seconds=TF_SECONDS[timeframe])
-    out = pd.DataFrame({
-        "Open":   df["Open"].resample(tf, origin="epoch").first(),
-        "High":   df["High"].resample(tf, origin="epoch").max(),
-        "Low":    df["Low"].resample(tf, origin="epoch").min(),
-        "Close":  df["Close"].resample(tf, origin="epoch").last(),
-        "Volume": df["Volume"].resample(tf, origin="epoch").sum(),
-    }).dropna(subset=["Close"])
-    return out
+    """Свечи с Bybit. Возвращает DataFrame с колонками
+    Open/High/Low/Close/Volume, UTC-индексом по времени открытия
+    и вычисленным close_time."""
+    symbol = to_bybit_symbol(ticker)
+    interval = BYBIT_INTERVAL.get(timeframe)
+    if interval is None:
+        raise RuntimeError(f"Bybit не поддерживает ТФ '{timeframe}'. "
+                           f"Допустимые: {', '.join(BYBIT_INTERVAL)}")
+    log(f"Загрузка {ticker} -> {symbol} {timeframe} (limit {KLINES_LIMIT})...")
+    r = requests.get(
+        BYBIT_KLINE_URL,
+        params={"category": "spot", "symbol": symbol,
+                "interval": interval, "limit": KLINES_LIMIT},
+        timeout=30,
+    )
+    if r.status_code != 200:
+        raise RuntimeError(f"Bybit вернул HTTP {r.status_code}: {r.text[:150]}")
+    payload = r.json()
+    if payload.get("retCode") != 0:
+        raise RuntimeError(f"Bybit ошибка {payload.get('retCode')}: "
+                           f"{payload.get('retMsg')} ({symbol})")
+    rows = payload["result"]["list"]
+    if not rows:
+        raise RuntimeError(f"Bybit не отдал свечи по {symbol}")
+    # Bybit отдаёт от новых к старым -> разворачиваем
+    df = pd.DataFrame(rows, columns=["open_time", "Open", "High", "Low",
+                                     "Close", "Volume", "turnover"])
+    for c in ["Open", "High", "Low", "Close", "Volume"]:
+        df[c] = df[c].astype(float)
+    df.index = pd.to_datetime(df["open_time"].astype("int64"),
+                              unit="ms", utc=True)
+    df = df.sort_index()
+    # Bybit не отдаёт close_time -> считаем сами
+    df["close_time"] = df.index + pd.Timedelta(seconds=TF_SECONDS[timeframe])
+    return df[["Open", "High", "Low", "Close", "Volume", "close_time"]]
 
 
 def prepare_candle(df: pd.DataFrame, timeframe: str):
-    """Выбираем свечу для анализа.
+    """Выбираем свечу для анализа по времени закрытия свечи.
 
-    - свеча уже закрылась        -> анализируем её как есть;
-    - до закрытия <= LEAD_MINUTES -> анализируем ФОРМИРУЮЩУЮСЯ свечу
-      (сигнал приходит на 5-7 минут раньше, риск перерисовки принят);
-    - до закрытия больше        -> рано, тикер пропускаем.
-
+    - свеча уже закрылась             -> анализируем её как есть;
+    - до закрытия <= LEAD_MINUTES     -> анализируем ФОРМИРУЮЩУЮСЮ свечу;
+    - до закрытия больше              -> рано, тикер пропускаем.
     Возвращает DataFrame или None (пропуск)."""
-    tf = pd.Timedelta(seconds=TF_SECONDS[timeframe])
-    last_open = df.index[-1]
-    if last_open.tzinfo is None:
-        last_open = last_open.tz_localize("UTC")
+    close_time = df["close_time"].iloc[-1]
     now = pd.Timestamp.now(tz="UTC")
-    remaining_min = (last_open + tf - now).total_seconds() / 60.0
+    remaining_min = (close_time - now).total_seconds() / 60.0
     if remaining_min <= 0:
         return df  # свеча закрыта
     if remaining_min > LEAD_MINUTES:
         log(f"До закрытия свечи ещё {remaining_min:.0f} мин "
             f"(> {LEAD_MINUTES}) — рано, пропуск")
         return None
-    log(f"До закрытия свечи {remaining_min:.1f} мин — "
-        f"анализируем формирующуюся")
+    log(f"До закрытия свечи {remaining_min:.1f} мин — анализируем формирующуюся")
     return df
 
 
@@ -257,7 +255,7 @@ def send_email(subject: str, body: str) -> None:
 
 
 def process_ticker(ticker: str, tf: str, fast: int, slow: int, state: dict) -> None:
-    """Анализ одного тикера. Ошибки по одному тикеру не роняют остальные."""
+    """Анализ одного тикера. Ошибки не роняют остальные."""
     df = fetch_data(ticker, tf)
     df = prepare_candle(df, tf)
     if df is None:
@@ -265,7 +263,7 @@ def process_ticker(ticker: str, tf: str, fast: int, slow: int, state: dict) -> N
 
     need = slow + SIGNAL_LEN + 5
     if len(df) < need:
-        log(f"{ticker}: слишком мало закрытых свечей: {len(df)} "
+        log(f"{ticker}: слишком мало свечей: {len(df)} "
             f"(нужно минимум {need}) — пропуск")
         return
 
@@ -278,7 +276,7 @@ def process_ticker(ticker: str, tf: str, fast: int, slow: int, state: dict) -> N
     c_curr = hist_color(float(curr["hist"]), float(prev["hist"]))
     c_prev = hist_color(float(prev["hist"]), float(before["hist"]))
 
-    candle_time = str(df.index[-1])  # вида 2026-10-03 12:00:00+00:00
+    candle_time = str(df.index[-1])  # время открытия свечи, UTC
     price = float(curr["Close"])
     hist_val = float(curr["hist"])
     sig_val = float(curr["signal"])
@@ -286,19 +284,20 @@ def process_ticker(ticker: str, tf: str, fast: int, slow: int, state: dict) -> N
     log(f"{ticker} {tf} | свеча {candle_time} | цена {price:.2f} | "
         f"signal({SIGNAL_LEN}) {sig_val:.2f} | hist {hist_val:.4f} | цвет: {c_curr}")
 
-    # смена цвета (тёмная -> светлая) + фильтр по сигнальной линии
-    flip_green = (c_prev == "dark_green") and (c_curr == "light_green")
-    flip_red = (c_prev == "dark_red") and (c_curr == "light_red")
-    green_signal = flip_green and (sig_val >= SIGNAL_GREEN_MIN)
-    red_signal = flip_red and (sig_val <= SIGNAL_RED_MAX)
+    # === ЛОГИКА СИГНАЛА ===
+    # GREEN: смена тёмно-зелёной -> светлозелёной, БЕЗ фильтра по signal
+    green_signal = (c_prev == "dark_green") and (c_curr == "light_green")
+    # RED: смена тёмно-красной -> светлокрасной, И signal(9) < 0
+    red_signal = ((c_prev == "dark_red") and (c_curr == "light_red")
+                  and (sig_val < 0))
 
     if not (green_signal or red_signal):
-        if flip_green:
-            log(f"  Смена тёмно-зелёной -> светлозелёная есть, но signal "
-                f"{sig_val:.2f} < {SIGNAL_GREEN_MIN:.2f} — фильтр не пройден.")
-        elif flip_red:
-            log(f"  Смена тёмно-красной -> светло-красная есть, но signal "
-                f"{sig_val:.2f} > {SIGNAL_RED_MAX:.2f} — фильтр не пройден.")
+        if c_prev == "dark_green" and c_curr == "light_green":
+            log("  Смена тёмно-зелёной -> светлозелёная есть — "
+                "но она не считается? (это сообщение не должно появляться)")
+        elif c_prev == "dark_red" and c_curr == "light_red":
+            log(f"  Смена тёмно-красной -> светлокрасная есть, но signal "
+                f"{sig_val:.2f} >= 0 — фильтр не пройден.")
         else:
             log("  Сигнала нет.")
         return
@@ -310,15 +309,17 @@ def process_ticker(ticker: str, tf: str, fast: int, slow: int, state: dict) -> N
         return
 
     direction = "GREEN" if green_signal else "RED"
+    sig_note = "" if green_signal else " | signal(9) < 0"
     subject = f"[{direction}] MACD {ticker} ({tf})"
     body = (
-        f"Сигнал MACD по вашей логике.\n\n"
+        f"Сигнал MACD (Bybit, {'формирующаяся свеча' if True else ''}).\n\n"
         f"Тикер:         {ticker}\n"
+        f"Bybit:         {to_bybit_symbol(ticker)}\n"
         f"Таймфрейм:     {tf}\n"
         f"Свеча (UTC):   {candle_time}\n"
-        f"Цена закрытия: {price:.2f}\n"
+        f"Цена:          {price:.2f}\n"
         f"Смена:         {COLOR_NAMES[c_prev]} -> {COLOR_NAMES[c_curr]}\n"
-        f"signal({SIGNAL_LEN}):     {sig_val:.4f}\n"
+        f"signal({SIGNAL_LEN}):     {sig_val:.4f}{sig_note}\n"
         f"hist:          {hist_val:.6f}\n\n"
         f"— MACD Alert Bot"
     )
@@ -339,18 +340,16 @@ def process_ticker(ticker: str, tf: str, fast: int, slow: int, state: dict) -> N
 def main() -> None:
     cfg = load_config()
 
-    # тикер может быть строкой или массивом
     tickers = cfg.get("ticker", "BTC-USD")
     if isinstance(tickers, str):
         tickers = [tickers]
 
-    tf = str(cfg.get("timeframe", "1h"))
+    tf = str(cfg.get("timeframe", "4h"))
     fast = int(cfg.get("macd_fast", cfg.get("fast", 12)))
     slow = int(cfg.get("macd_slow", cfg.get("slow", 26)))
 
-    log(f"Тикеров в обработке: {len(tickers)} | ТФ: {tf} | "
-        f"MACD({fast},{slow},{SIGNAL_LEN}) | "
-        f"пороги: GREEN>={SIGNAL_GREEN_MIN}, RED<={SIGNAL_RED_MAX}")
+    log(f"Тикеров: {len(tickers)} | ТФ: {tf} | MACD({fast},{slow},{SIGNAL_LEN}) | "
+        f"источник: Bybit | ранний сигнал: за {LEAD_MINUTES} мин до закрытия")
 
     state = load_state()
     any_signal = False
