@@ -1,28 +1,30 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-MACD Alert Bot (Binance, multi-ticker, ранний сигнал)
-======================================================
+MACD + RSI Alert Bot (Binance, multi-ticker, ранний сигнал)
+============================================================
 Данные — Binance public market data через зеркало data-api.binance.vision
 (публичные klines, без ключа, без геоблокировки для облачных IP).
 
-Сигнал на свече за LEAD_MINUTES минут до её закрытия при ОДНОВРЕМЕННОМ
-выполнении условий:
+Сигналы на свече за LEAD_MINUTES минут до её закрытия:
 
-  GREEN:  смена тёмно-зелёной -> светлозелёной (hist > 0: рост сменился падением)
-          БЕЗ всяких фильтров по signal
+  MACD:
+    GREEN:  смена тёмно-зелёной -> светлозелёной (hist > 0: рост сменился падением)
+            БЕЗ всяких фильтров по signal
+    GREEN2: смена светлозелёной -> тёмно-зелёной (hist > 0: падение сменилось ростом)
+            БЕЗ всяких фильтров по signal
+    RED:    смена тёмно-красной -> светло-красной (hist < 0: падение сменилось ростом)
+            И signal(9) < 0
 
-  GREEN2: смена светлозелёной -> тёмно-зелёной (hist > 0: падение сменилось ростом)
-          БЕЗ всяких фильтров по signal
-
-  RED:    смена тёмно-красной -> светло-красной (hist < 0: падение сменилось ростом)
-          И signal(9) < 0
+  RSI(14):
+    RSI_OVERBOUGHT: RSI > 70
+    RSI_OVERSOLD:   RSI < 30
 
 Особенности:
   - несколько тикеров (массив в config.json), по каждому независимый анализ;
   - ТФ напрямую из конфига (Binance поддерживает 4h нативно);
   - анализ за LEAD_MINUTES минут до закрытия; после закрытия повтора не будет
-    (дедупликация по "TICKER_TF" -> время свечи в state.json);
+    (дедупликация по "TICKER_TF_DIRECTION" -> время свечи в state.json);
   - ошибка по одному тикеру не роняет остальные.
 
 config.json:
@@ -56,7 +58,7 @@ STATE_PATH = BASE_DIR / "state.json"
 
 # Публичное зеркало Binance для market data — не блокирует дата-центры.
 BINANCE_KLINE_URL = "https://data-api.binance.vision/api/v3/klines"
-KLINES_LIMIT = 500  # свечей на запрос (хватит для MACD 26+9+запас)
+KLINES_LIMIT = 500  # свечей на запрос (хватит для MACD 26+9+запас и RSI 14)
 
 # таймфрейм -> интервал Binance
 BINANCE_INTERVAL = {
@@ -67,6 +69,11 @@ BINANCE_INTERVAL = {
 
 # длина сигнальной линии MACD
 SIGNAL_LEN = 9
+
+# период RSI
+RSI_LEN = 14
+RSI_OVERBOUGHT = 70
+RSI_OVERSOLD = 30
 
 # анализируем свечу, когда до её закрытия осталось <= LEAD_MINUTES минут
 LEAD_MINUTES = 7
@@ -183,9 +190,6 @@ def fetch_data(ticker: str, timeframe: str) -> pd.DataFrame:
     if not rows:
         raise RuntimeError(f"Binance не отдал свечи по {symbol}")
 
-    # Binance klines: [open_time, Open, High, Low, Close, Volume,
-    #                  close_time, quote_asset_volume, trades,
-    #                  taker_buy_base, taker_buy_quote, ignore]
     df = pd.DataFrame(rows, columns=[
         "open_time", "Open", "High", "Low", "Close", "Volume",
         "close_time", "qav", "trades", "tbb", "tbq", "ignore",
@@ -221,16 +225,33 @@ def prepare_candle(df: pd.DataFrame, timeframe: str):
     return df
 
 
-def add_macd(df: pd.DataFrame, fast: int, slow: int, signal_len: int) -> pd.DataFrame:
+def add_indicators(df: pd.DataFrame, fast: int, slow: int,
+                   signal_len: int, rsi_len: int) -> pd.DataFrame:
+    """Добавляет MACD (macd/signal/hist) и RSI(rsi_len)."""
     close = df["Close"]
+
+    # MACD
     ema_fast = close.ewm(span=fast, adjust=False).mean()
     ema_slow = close.ewm(span=slow, adjust=False).mean()
     macd_line = ema_fast - ema_slow
     sig_line = macd_line.ewm(span=signal_len, adjust=False).mean()
+
+    # RSI (метод Уайлдера через EWM с alpha=1/len)
+    delta = close.diff()
+    gain = delta.clip(lower=0.0)
+    loss = -delta.clip(upper=0.0)
+    avg_gain = gain.ewm(alpha=1.0 / rsi_len, adjust=False, min_periods=rsi_len).mean()
+    avg_loss = loss.ewm(alpha=1.0 / rsi_len, adjust=False, min_periods=rsi_len).mean()
+    rs = avg_gain / avg_loss
+    rsi = 100.0 - (100.0 / (1.0 + rs))
+    # если avg_loss == 0 -> RSI = 100
+    rsi = rsi.where(avg_loss != 0, 100.0)
+
     out = df.copy()
     out["macd"] = macd_line
     out["signal"] = sig_line
     out["hist"] = macd_line - sig_line
+    out["rsi"] = rsi
     return out
 
 
@@ -242,6 +263,15 @@ def hist_color(hist: float, hist_prev: float) -> str:
     if hist < 0 and hist > hist_prev:   # ниже нуля и растёт
         return "light_red"
     return "dark_red"                   # ниже нуля и падает
+
+
+def fmt_price(price: float) -> str:
+    """Адаптивный формат цены: для дешёвых монет больше знаков."""
+    if price >= 1:
+        return f"{price:.2f}"
+    if price >= 0.01:
+        return f"{price:.4f}"
+    return f"{price:.8f}".rstrip("0").rstrip(".")
 
 
 def send_email(subject: str, body: str) -> None:
@@ -267,13 +297,13 @@ def process_ticker(ticker: str, tf: str, fast: int, slow: int, state: dict) -> N
     if df is None:
         return
 
-    need = slow + SIGNAL_LEN + 5
+    need = max(slow + SIGNAL_LEN + 5, RSI_LEN + 5)
     if len(df) < need:
         log(f"{ticker}: слишком мало свечей: {len(df)} "
             f"(нужно минимум {need}) — пропуск")
         return
 
-    df = add_macd(df, fast, slow, SIGNAL_LEN)
+    df = add_indicators(df, fast, slow, SIGNAL_LEN, RSI_LEN)
 
     curr = df.iloc[-1]
     prev = df.iloc[-2]
@@ -286,68 +316,83 @@ def process_ticker(ticker: str, tf: str, fast: int, slow: int, state: dict) -> N
     price = float(curr["Close"])
     hist_val = float(curr["hist"])
     sig_val = float(curr["signal"])
+    rsi_val = float(curr["rsi"]) if pd.notna(curr["rsi"]) else float("nan")
 
-    log(f"{ticker} {tf} | свеча {candle_time} | цена {price:.2f} | "
-        f"signal({SIGNAL_LEN}) {sig_val:.2f} | hist {hist_val:.4f} | цвет: {c_curr}")
+    rsi_str = f"{rsi_val:.2f}" if pd.notna(rsi_val) else "n/a"
+    log(f"{ticker} {tf} | свеча {candle_time} | цена {fmt_price(price)} | "
+        f"signal({SIGNAL_LEN}) {sig_val:.2f} | hist {hist_val:.4f} | "
+        f"RSI({RSI_LEN}) {rsi_str} | цвет: {c_curr}")
 
-    # === ЛОГИКА СИГНАЛА ===
-    # GREEN: смена тёмно-зелёной -> светлозелёной, БЕЗ фильтра по signal
+    # === ЛОГИКА СИГНАЛОВ ===
+    # MACD:
     green_signal = (c_prev == "dark_green") and (c_curr == "light_green")
-    # GREEN2: смена светлозелёной -> тёмнозелёной, БЕЗ фильтра по signal
     green2_signal = (c_prev == "light_green") and (c_curr == "dark_green")
-    # RED: смена тёмно-красной -> светлокрасной, И signal(9) < 0
     red_signal = ((c_prev == "dark_red") and (c_curr == "light_red")
                   and (sig_val < 0))
 
-    if not (green_signal or green2_signal or red_signal):
-        if c_prev == "dark_green" and c_curr == "light_green":
-            log("  Смена тёмно-зелёной -> светлозелёная есть — "
-                "но она не считается? (это сообщение не должно появляться)")
-        elif c_prev == "dark_red" and c_curr == "light_red":
+    # RSI:
+    rsi_overbought = pd.notna(rsi_val) and rsi_val > RSI_OVERBOUGHT
+    rsi_oversold = pd.notna(rsi_val) and rsi_val < RSI_OVERSOLD
+
+    # какие сигналы сработали
+    fired = []
+    if green_signal:
+        fired.append("GREEN")
+    if green2_signal:
+        fired.append("GREEN2")
+    if red_signal:
+        fired.append("RED")
+    if rsi_overbought:
+        fired.append("RSI_OVERBOUGHT")
+    if rsi_oversold:
+        fired.append("RSI_OVERSOLD")
+
+    if not fired:
+        # диагностика как раньше
+        if c_prev == "dark_red" and c_curr == "light_red" and sig_val >= 0:
             log(f"  Смена тёмно-красной -> светлокрасная есть, но signal "
                 f"{sig_val:.2f} >= 0 — фильтр не пройден.")
         else:
-            log("  Сигнала нет.")
+            log("  Сигналов нет.")
         return
 
-    # защита от повторной отправки по той же свече — КЛЮЧ НА ТИКЕР
-    state_key = f"{ticker}_{tf}"
-    if state.get(state_key) == candle_time:
-        log(f"  Сигнал по свече {candle_time} уже отправлялся — пропуск.")
-        return
+    # дедупликация: ключ на тикер+ТФ+направление
+    for direction in fired:
+        state_key = f"{ticker}_{tf}_{direction}"
+        if state.get(state_key) == candle_time:
+            log(f"  {direction} по свече {candle_time} уже отправлялся — пропуск.")
+            continue
 
-    if green_signal:
-        direction = "GREEN"
-    elif green2_signal:
-        direction = "GREEN2"
-    else:
-        direction = "RED"
-    sig_note = "" if (green_signal or green2_signal) else " | signal(9) < 0"
-    subject = f"[{direction}] MACD {ticker} ({tf})"
-    body = (
-        f"Сигнал MACD (Binance, формирующаяся свеча).\n\n"
-        f"Тикер:         {ticker}\n"
-        f"Binance:       {to_binance_symbol(ticker)}\n"
-        f"Таймфрейм:     {tf}\n"
-        f"Свеча (UTC):   {candle_time}\n"
-        f"Цена:          {price:.2f}\n"
-        f"Смена:         {COLOR_NAMES[c_prev]} -> {COLOR_NAMES[c_curr]}\n"
-        f"signal({SIGNAL_LEN}):     {sig_val:.4f}{sig_note}\n"
-        f"hist:          {hist_val:.6f}\n\n"
-        f"— MACD Alert Bot"
-    )
+        # тексты
+        if direction == "GREEN":
+            note = "MACD: смена тёмно-зелёной -> светлозелёной (hist > 0, рост сменился падением)"
+        elif direction == "GREEN2":
+            note = "MACD: смена светлозелёной -> тёмно-зелёной (hist > 0, падение сменилось ростом)"
+        elif direction == "RED":
+            note = "MACD: смена тёмно-красной -> светло-красной (hist < 0), signal(9) < 0"
+        elif direction == "RSI_OVERBOUGHT":
+            note = f"RSI({RSI_LEN}) > {RSI_OVERBOUGHT} — перекупленность"
+        else:  # RSI_OVERSOLD
+            note = f"RSI({RSI_LEN}) < {RSI_OVERSOLD} — перепроданность"
 
-    send_email(subject, body)
+        subject = f"[{direction}] {ticker} ({tf})"
+        body = (
+            f"Сигнал: {note}\n\n"
+            f"Тикер:         {ticker}\n"
+            f"Binance:       {to_binance_symbol(ticker)}\n"
+            f"Таймфрейм:     {tf}\n"
+            f"Свеча (UTC):   {candle_time}\n"
+            f"Цена:          {fmt_price(price)}\n"
+            f"Цвет MACD:     {COLOR_NAMES[c_curr]}\n"
+            f"signal({SIGNAL_LEN}):     {sig_val:.4f}\n"
+            f"hist:          {hist_val:.6f}\n"
+            f"RSI({RSI_LEN}):       {rsi_str}\n\n"
+            f"— MACD/RSI Alert Bot"
+        )
 
-    state[state_key] = candle_time
-    state[f"{state_key}_last"] = {
-        "direction": direction,
-        "time_utc": candle_time,
-        "price": price,
-        "signal": sig_val,
-        "hist": hist_val,
-    }
-    log(f"  EMAIL ОТПРАВЛЕН: {subject}")
+        send_email(subject, body)
+        state[state_key] = candle_time
+        log(f"  EMAIL ОТПРАВЛЕН: {subject}")
 
 
 def main() -> None:
@@ -361,7 +406,8 @@ def main() -> None:
     fast = int(cfg.get("macd_fast", cfg.get("fast", 12)))
     slow = int(cfg.get("macd_slow", cfg.get("slow", 26)))
 
-    log(f"Тикеров: {len(tickers)} | ТФ: {tf} | MACD({fast},{slow},{SIGNAL_LEN}) | "
+    log(f"Тикеров: {len(tickers)} | ТФ: {tf} | "
+        f"MACD({fast},{slow},{SIGNAL_LEN}) + RSI({RSI_LEN}) | "
         f"источник: Binance | ранний сигнал: за {LEAD_MINUTES} мин до закрытия")
 
     state = load_state()
