@@ -20,7 +20,7 @@ jobs:
           python-version: '3.12'
 
       - name: Установка зависимостей
-        run: pip install --quiet yfinance pandas
+        run: pip install --quiet requests pandas
 
       - name: Проверка MACD и отправка email
         env:
