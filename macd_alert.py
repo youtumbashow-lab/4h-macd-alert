@@ -7,7 +7,7 @@ MACD + RSI Alert Bot (Binance, multi-ticker, по ЗАКРЫТОЙ свече)
 (публичные klines, без ключа, без геоблокировки для облачных IP).
 
 Анализируется ПОСЛЕДНЯЯ ЗАКРЫТАЯ свеча. Запуск через ~1 минуту после её
-закрытия (cron `1 0,4,8,12,16,20 * * *` UTC для 4h).
+закрытия (cron `1 */4 * * *` UTC для 4h).
 
 Сигналы на закрытой свече:
 
@@ -22,6 +22,8 @@ MACD + RSI Alert Bot (Binance, multi-ticker, по ЗАКРЫТОЙ свече)
   RSI(14):
     RSI_OVERBOUGHT: RSI > 70
     RSI_OVERSOLD:   RSI < 30
+
+Все сработавшие сигналы за один запуск отправляются ОДНИМ письмом.
 
 Особенности:
   - несколько тикеров (массив в config.json), по каждому независимый анализ;
@@ -58,11 +60,9 @@ BASE_DIR = Path(__file__).resolve().parent
 CONFIG_PATH = BASE_DIR / "config.json"
 STATE_PATH = BASE_DIR / "state.json"
 
-# Публичное зеркало Binance для market data — не блокирует дата-центры.
 BINANCE_KLINE_URL = "https://data-api.binance.vision/api/v3/klines"
 KLINES_LIMIT = 500
 
-# таймфрейм -> интервал Binance
 BINANCE_INTERVAL = {
     "1m": "1m", "3m": "3m", "5m": "5m", "15m": "15m", "30m": "30m",
     "1h": "1h", "2h": "2h", "4h": "4h", "6h": "6h", "8h": "8h",
@@ -74,8 +74,6 @@ RSI_LEN = 14
 RSI_OVERBOUGHT = 70
 RSI_OVERSOLD = 30
 
-# Свеча считается «закрытой» с запасом POST_CLOSE_SECONDS после её close_time.
-# Нужно, чтобы Binance успел зафиксировать свечу.
 POST_CLOSE_SECONDS = 30
 
 TF_SECONDS = {
@@ -89,6 +87,14 @@ COLOR_NAMES = {
     "dark_green":  "тёмно-зелёная (выше 0, растёт)",
     "light_red":   "светло-красная (ниже 0, растёт)",
     "dark_red":    "тёмно-красная (ниже 0, падает)",
+}
+
+DIRECTION_NOTES = {
+    "GREEN":          "MACD: тёмно-зелёная -> светлозелёная (hist > 0, рост сменился падением)",
+    "GREEN2":         "MACD: светлозелёная -> тёмно-зелёная (hist > 0, падение сменилось ростом)",
+    "RED":            "MACD: тёмно-красная -> светло-красная (hist < 0), signal(9) < 0",
+    "RSI_OVERBOUGHT": f"RSI({RSI_LEN}) > {RSI_OVERBOUGHT} — перекупленность",
+    "RSI_OVERSOLD":   f"RSI({RSI_LEN}) < {RSI_OVERSOLD} — перепроданность",
 }
 
 
@@ -114,7 +120,6 @@ def load_config() -> dict:
 
 
 def to_binance_symbol(ticker: str) -> str:
-    """'BTC-USD' -> 'BTCUSDT', 'ETH-USDT' -> 'ETHUSDT', 'SOL' -> 'SOLUSDT'."""
     t = ticker.strip().upper()
     if t.endswith("-USD"):
         return t[:-4] + "USDT"
@@ -167,9 +172,6 @@ def commit_state_to_repo() -> None:
 
 
 def fetch_data(ticker: str, timeframe: str) -> pd.DataFrame:
-    """Свечи с Binance (через публичное зеркало). Возвращает DataFrame
-    с колонками Open/High/Low/Close/Volume, UTC-индексом по open_time
-    и колонкой close_time."""
     symbol = to_binance_symbol(ticker)
     interval = BINANCE_INTERVAL.get(timeframe)
     if interval is None:
@@ -203,17 +205,12 @@ def fetch_data(ticker: str, timeframe: str) -> pd.DataFrame:
 
 
 def take_closed_candle(df: pd.DataFrame, timeframe: str):
-    """Оставляем только свечи, которые уже закрыты (close_time + запас <= now).
-
-    Возвращает DataFrame, у которого последняя строка — последняя ЗАКРЫТАЯ
-    свеча. Если после фильтрации осталось < 3 свечей — None."""
     now = pd.Timestamp.now(tz="UTC")
     cutoff = now - pd.Timedelta(seconds=POST_CLOSE_SECONDS)
     closed = df[df["close_time"] <= cutoff]
     if len(closed) < 3:
         log(f"Закрытых свечей пока {len(closed)} (< 3) — пропуск")
         return None
-
     last_close = closed["close_time"].iloc[-1]
     age_sec = (now - last_close).total_seconds()
     log(f"Последняя закрытая свеча: {closed.index[-1]} "
@@ -225,13 +222,11 @@ def add_indicators(df: pd.DataFrame, fast: int, slow: int,
                    signal_len: int, rsi_len: int) -> pd.DataFrame:
     close = df["Close"]
 
-    # MACD
     ema_fast = close.ewm(span=fast, adjust=False).mean()
     ema_slow = close.ewm(span=slow, adjust=False).mean()
     macd_line = ema_fast - ema_slow
     sig_line = macd_line.ewm(span=signal_len, adjust=False).mean()
 
-    # RSI (метод Уайлдера)
     delta = close.diff()
     gain = delta.clip(lower=0.0)
     loss = -delta.clip(upper=0.0)
@@ -285,17 +280,21 @@ def send_email(subject: str, body: str) -> None:
         s.send_message(msg)
 
 
-def process_ticker(ticker: str, tf: str, fast: int, slow: int, state: dict) -> None:
+def process_ticker(ticker: str, tf: str, fast: int, slow: int,
+                   state: dict) -> list:
+    """Анализ одного тикера. Возвращает список сработавших сигналов
+    (dict'ов) или пустой список. State обновляется по ходу, чтобы
+    дедупликация работала даже при последующей ошибке."""
     df = fetch_data(ticker, tf)
     df = take_closed_candle(df, tf)
     if df is None:
-        return
+        return []
 
     need = max(slow + SIGNAL_LEN + 5, RSI_LEN + 5)
     if len(df) < need:
         log(f"{ticker}: слишком мало свечей: {len(df)} "
             f"(нужно минимум {need}) — пропуск")
-        return
+        return []
 
     df = add_indicators(df, fast, slow, SIGNAL_LEN, RSI_LEN)
 
@@ -317,13 +316,11 @@ def process_ticker(ticker: str, tf: str, fast: int, slow: int, state: dict) -> N
         f"цена {fmt_price(price)} | signal({SIGNAL_LEN}) {sig_val:.2f} | "
         f"hist {hist_val:.4f} | RSI({RSI_LEN}) {rsi_str} | цвет: {c_curr}")
 
-    # MACD:
     green_signal = (c_prev == "dark_green") and (c_curr == "light_green")
     green2_signal = (c_prev == "light_green") and (c_curr == "dark_green")
     red_signal = ((c_prev == "dark_red") and (c_curr == "light_red")
                   and (sig_val < 0))
 
-    # RSI:
     rsi_overbought = pd.notna(rsi_val) and rsi_val > RSI_OVERBOUGHT
     rsi_oversold = pd.notna(rsi_val) and rsi_val < RSI_OVERSOLD
 
@@ -345,46 +342,77 @@ def process_ticker(ticker: str, tf: str, fast: int, slow: int, state: dict) -> N
                 f"{sig_val:.2f} >= 0 — фильтр не пройден.")
         else:
             log("  Сигналов нет.")
-        return
+        return []
 
+    results = []
     for direction in fired:
         state_key = f"{ticker}_{tf}_{direction}"
         if state.get(state_key) == candle_time:
             log(f"  {direction} по свече {candle_time} уже отправлялся — пропуск.")
             continue
 
-        if direction == "GREEN":
-            note = ("MACD: смена тёмно-зелёной -> светлозелёной "
-                    "(hist > 0, рост сменился падением)")
-        elif direction == "GREEN2":
-            note = ("MACD: смена светлозелёной -> тёмно-зелёной "
-                    "(hist > 0, падение сменилось ростом)")
-        elif direction == "RED":
-            note = ("MACD: смена тёмно-красной -> светло-красной (hist < 0), "
-                    "signal(9) < 0")
-        elif direction == "RSI_OVERBOUGHT":
-            note = f"RSI({RSI_LEN}) > {RSI_OVERBOUGHT} — перекупленность"
-        else:
-            note = f"RSI({RSI_LEN}) < {RSI_OVERSOLD} — перепроданность"
-
-        subject = f"[{direction}] {ticker} ({tf})"
-        body = (
-            f"Сигнал: {note}\n\n"
-            f"Тикер:         {ticker}\n"
-            f"Binance:       {to_binance_symbol(ticker)}\n"
-            f"Таймфрейм:     {tf}\n"
-            f"Свеча (UTC):   {candle_time}\n"
-            f"Цена закрытия: {fmt_price(price)}\n"
-            f"Цвет MACD:     {COLOR_NAMES[c_curr]}\n"
-            f"signal({SIGNAL_LEN}):     {sig_val:.4f}\n"
-            f"hist:          {hist_val:.6f}\n"
-            f"RSI({RSI_LEN}):       {rsi_str}\n\n"
-            f"— MACD/RSI Alert Bot (закрытая свеча)"
-        )
-
-        send_email(subject, body)
         state[state_key] = candle_time
-        log(f"  EMAIL ОТПРАВЛЕН: {subject}")
+        results.append({
+            "ticker": ticker,
+            "symbol": to_binance_symbol(ticker),
+            "tf": tf,
+            "direction": direction,
+            "note": DIRECTION_NOTES[direction],
+            "candle_time": candle_time,
+            "price": price,
+            "price_str": fmt_price(price),
+            "color_prev": c_prev,
+            "color_curr": c_curr,
+            "signal": sig_val,
+            "hist": hist_val,
+            "rsi_str": rsi_str,
+        })
+    return results
+
+
+def build_email(signals: list) -> tuple:
+    """Собирает subject и body для одного письма со всеми сигналами."""
+    n = len(signals)
+    directions = sorted({s["direction"] for s in signals})
+    tickers = sorted({s["ticker"] for s in signals})
+
+    if n == 1:
+        s = signals[0]
+        subject = f"[{s['direction']}] {s['ticker']} ({s['tf']})"
+    else:
+        dirs_str = ", ".join(directions)
+        if len(tickers) <= 4:
+            tick_str = ", ".join(tickers)
+        else:
+            tick_str = f"{tickers[0]}, {tickers[1]}, … (+{len(tickers)-2})"
+        subject = f"[MACD/RSI] {n} сигналов ({dirs_str}) — {tick_str}"
+
+    lines = []
+    lines.append(f"Сработало сигналов: {n}")
+    lines.append(f"Направления: {', '.join(directions)}")
+    lines.append(f"Тикеры: {', '.join(tickers)}")
+    lines.append("")
+    lines.append("=" * 60)
+
+    for s in signals:
+        lines.append("")
+        lines.append(f"[{s['direction']}] {s['ticker']} ({s['tf']})")
+        lines.append("-" * 60)
+        lines.append(f"  Причина:       {s['note']}")
+        lines.append(f"  Binance:       {s['symbol']}")
+        lines.append(f"  Свеча (UTC):   {s['candle_time']}")
+        lines.append(f"  Цена закрытия: {s['price_str']}")
+        lines.append(f"  Цвет MACD:     {COLOR_NAMES[s['color_curr']]}")
+        lines.append(f"  signal(9):     {s['signal']:.4f}")
+        lines.append(f"  hist:          {s['hist']:.6f}")
+        lines.append(f"  RSI(14):       {s['rsi_str']}")
+
+    lines.append("")
+    lines.append("=" * 60)
+    lines.append("— MACD/RSI Alert Bot (закрытая свеча)")
+
+    body = "\n".join(lines)
+    return subject, body
 
 
 def main() -> None:
@@ -403,23 +431,31 @@ def main() -> None:
         f"источник: Binance | режим: ЗАКРЫТАЯ свеча")
 
     state = load_state()
-    any_signal = False
+    all_signals = []
 
     for ticker in tickers:
         try:
-            before_keys = set(state.keys())
-            process_ticker(str(ticker).strip(), tf, fast, slow, state)
-            if set(state.keys()) != before_keys:
-                any_signal = True
+            results = process_ticker(str(ticker).strip(), tf, fast, slow, state)
+            if results:
+                all_signals.extend(results)
         except SystemExit:
             raise
         except Exception as e:
             log(f"{ticker}: ошибка — {e} (переходим к следующему)")
             continue
 
-    if any_signal:
+    if all_signals:
+        subject, body = build_email(all_signals)
+        try:
+            send_email(subject, body)
+            log(f"EMAIL ОТПРАВЛЕН: {subject}")
+        except Exception as e:
+            log(f"Не удалось отправить email: {e}")
         save_state(state)
         commit_state_to_repo()
+    else:
+        log("Сигналов нет — письмо не отправляется.")
+
     log("Выход.")
 
 
