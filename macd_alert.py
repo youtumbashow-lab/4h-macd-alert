@@ -359,17 +359,15 @@ def process_ticker(ticker: str, tf: str, fast: int, slow: int,
 
 
 def build_email(signals: list) -> tuple:
-    """Собирает subject и body. Сигналы группируются по тикеру."""
+    """Собирает subject и body. Сигналы группируются по тикеру:
+    заголовок тикера + список сработавших сигналов."""
     n = len(signals)
     directions = sorted({s["direction"] for s in signals})
 
-    # группировка: {ticker: {"meta": <первый сигнал>, "signals": [<directions>]}}
+    # группировка: {ticker: [список сигналов]}
     by_ticker = {}
     for s in signals:
-        t = s["ticker"]
-        if t not in by_ticker:
-            by_ticker[t] = {"meta": s, "signals": []}
-        by_ticker[t]["signals"].append(s)
+        by_ticker.setdefault(s["ticker"], []).append(s)
 
     tickers_sorted = sorted(by_ticker.keys())
 
@@ -397,18 +395,14 @@ def build_email(signals: list) -> tuple:
 
     for ticker in tickers_sorted:
         group = by_ticker[ticker]
-        meta = group["meta"]
-        dirs = [s["direction"] for s in group["signals"]]
+        tf = group[0]["tf"]
+        dirs = [s["direction"] for s in group]
 
         lines.append("")
-        lines.append(f"{ticker} ({meta['tf']})")
+        lines.append(f"{ticker} ({tf})")
         lines.append("-" * 60)
-        lines.append(f"  Binance:       {meta['symbol']}")
-        lines.append(f"  Цена закрытия: {meta['price_str']}")
-        lines.append(f"  Цвет MACD:     {COLOR_NAMES[meta['color_curr']]}")
-        lines.append("")
-        lines.append(f"  Сработавшие сигналы ({len(dirs)}):")
-        for s in group["signals"]:
+        lines.append(f"    Сработавшие сигналы ({len(dirs)}):")
+        for s in group:
             lines.append(f"    • {s['direction']:<15} — {s['note']}")
 
     lines.append("")
