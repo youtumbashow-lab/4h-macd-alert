@@ -23,13 +23,8 @@ MACD + RSI Alert Bot (Binance, multi-ticker, по ЗАКРЫТОЙ свече)
     RSI_OVERBOUGHT: RSI > 70
     RSI_OVERSOLD:   RSI < 30
 
-Все сработавшие сигналы за один запуск отправляются ОДНИМ письмом.
-
-Особенности:
-  - несколько тикеров (массив в config.json), по каждому независимый анализ;
-  - ТФ напрямую из конфига;
-  - дедупликация по "TICKER_TF_DIRECTION" -> время свечи в state.json;
-  - ошибка по одному тикеру не роняет остальные.
+Все сработавшие сигналы за один запуск отправляются ОДНИМ письмом,
+сгруппированным по тикеру.
 
 config.json:
   {
@@ -283,8 +278,7 @@ def send_email(subject: str, body: str) -> None:
 def process_ticker(ticker: str, tf: str, fast: int, slow: int,
                    state: dict) -> list:
     """Анализ одного тикера. Возвращает список сработавших сигналов
-    (dict'ов) или пустой список. State обновляется по ходу, чтобы
-    дедупликация работала даже при последующей ошибке."""
+    (dict'ов) или пустой список. State обновляется по ходу."""
     df = fetch_data(ticker, tf)
     df = take_closed_candle(df, tf)
     if df is None:
@@ -358,54 +352,64 @@ def process_ticker(ticker: str, tf: str, fast: int, slow: int,
             "tf": tf,
             "direction": direction,
             "note": DIRECTION_NOTES[direction],
-            "candle_time": candle_time,
-            "price": price,
             "price_str": fmt_price(price),
-            "color_prev": c_prev,
             "color_curr": c_curr,
-            "signal": sig_val,
-            "hist": hist_val,
-            "rsi_str": rsi_str,
         })
     return results
 
 
 def build_email(signals: list) -> tuple:
-    """Собирает subject и body для одного письма со всеми сигналами."""
+    """Собирает subject и body. Сигналы группируются по тикеру."""
     n = len(signals)
     directions = sorted({s["direction"] for s in signals})
-    tickers = sorted({s["ticker"] for s in signals})
 
+    # группировка: {ticker: {"meta": <первый сигнал>, "signals": [<directions>]}}
+    by_ticker = {}
+    for s in signals:
+        t = s["ticker"]
+        if t not in by_ticker:
+            by_ticker[t] = {"meta": s, "signals": []}
+        by_ticker[t]["signals"].append(s)
+
+    tickers_sorted = sorted(by_ticker.keys())
+
+    # === Subject ===
     if n == 1:
         s = signals[0]
         subject = f"[{s['direction']}] {s['ticker']} ({s['tf']})"
     else:
         dirs_str = ", ".join(directions)
-        if len(tickers) <= 4:
-            tick_str = ", ".join(tickers)
+        if len(tickers_sorted) <= 4:
+            tick_str = ", ".join(tickers_sorted)
         else:
-            tick_str = f"{tickers[0]}, {tickers[1]}, … (+{len(tickers)-2})"
-        subject = f"[MACD/RSI] {n} сигналов ({dirs_str}) — {tick_str}"
+            tick_str = (f"{tickers_sorted[0]}, {tickers_sorted[1]}, "
+                        f"… (+{len(tickers_sorted)-2})")
+        subject = (f"[MACD/RSI] {n} сигналов ({dirs_str}) — "
+                   f"{len(tickers_sorted)} тикеров: {tick_str}")
 
+    # === Body ===
     lines = []
     lines.append(f"Сработало сигналов: {n}")
-    lines.append(f"Направления: {', '.join(directions)}")
-    lines.append(f"Тикеры: {', '.join(tickers)}")
+    lines.append(f"Тикеров затронуто:  {len(tickers_sorted)}")
+    lines.append(f"Направления:        {', '.join(directions)}")
     lines.append("")
     lines.append("=" * 60)
 
-    for s in signals:
+    for ticker in tickers_sorted:
+        group = by_ticker[ticker]
+        meta = group["meta"]
+        dirs = [s["direction"] for s in group["signals"]]
+
         lines.append("")
-        lines.append(f"[{s['direction']}] {s['ticker']} ({s['tf']})")
+        lines.append(f"{ticker} ({meta['tf']})")
         lines.append("-" * 60)
-        lines.append(f"  Причина:       {s['note']}")
-        lines.append(f"  Binance:       {s['symbol']}")
-        lines.append(f"  Свеча (UTC):   {s['candle_time']}")
-        lines.append(f"  Цена закрытия: {s['price_str']}")
-        lines.append(f"  Цвет MACD:     {COLOR_NAMES[s['color_curr']]}")
-        lines.append(f"  signal(9):     {s['signal']:.4f}")
-        lines.append(f"  hist:          {s['hist']:.6f}")
-        lines.append(f"  RSI(14):       {s['rsi_str']}")
+        lines.append(f"  Binance:       {meta['symbol']}")
+        lines.append(f"  Цена закрытия: {meta['price_str']}")
+        lines.append(f"  Цвет MACD:     {COLOR_NAMES[meta['color_curr']]}")
+        lines.append("")
+        lines.append(f"  Сработавшие сигналы ({len(dirs)}):")
+        for s in group["signals"]:
+            lines.append(f"    • {s['direction']:<15} — {s['note']}")
 
     lines.append("")
     lines.append("=" * 60)
