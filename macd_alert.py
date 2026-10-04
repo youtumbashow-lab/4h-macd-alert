@@ -76,7 +76,7 @@ RSI_OVERBOUGHT = 70
 RSI_OVERSOLD = 30
 
 # анализируем свечу, когда до её закрытия осталось <= LEAD_MINUTES минут
-LEAD_MINUTES = 7
+LEAD_MINUTES = 250
 
 # длительность таймфрейма в секундах (для подстраховки таймингов)
 TF_SECONDS = {
