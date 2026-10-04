@@ -8,11 +8,14 @@ MACD Alert Bot (Bybit, multi-ticker, ранний сигнал)
 Сигнал на свече за LEAD_MINUTES минут до её закрытия при ОДНОВРЕМЕННОМ
 выполнении условий:
 
-  GREEN: смена тёмно-зелёной -> светлозелёной (hist > 0: рост сменился падением)
-         БЕЗ всяких фильтров по signal
+  GREEN:  смена тёмно-зелёной -> светлозелёной (hist > 0: рост сменился падением)
+          БЕЗ всяких фильтров по signal
 
-  RED:   смена тёмно-красной -> светло-красной (hist < 0: падение сменилось ростом)
-         И signal(9) < 0
+  GREEN2: смена светлозелёной -> тёмно-зелёной (hist > 0: падение сменилось ростом)
+          БЕЗ всяких фильтров по signal
+
+  RED:    смена тёмно-красной -> светло-красной (hist < 0: падение сменилось ростом)
+          И signal(9) < 0
 
 Особенности:
   - несколько тикеров (массив в config.json), по каждому независимый анализ;
@@ -287,11 +290,13 @@ def process_ticker(ticker: str, tf: str, fast: int, slow: int, state: dict) -> N
     # === ЛОГИКА СИГНАЛА ===
     # GREEN: смена тёмно-зелёной -> светлозелёной, БЕЗ фильтра по signal
     green_signal = (c_prev == "dark_green") and (c_curr == "light_green")
+    # GREEN2: смена светлозелёной -> тёмнозелёной, БЕЗ фильтра по signal
+    green2_signal = (c_prev == "light_green") and (c_curr == "dark_green")
     # RED: смена тёмно-красной -> светлокрасной, И signal(9) < 0
     red_signal = ((c_prev == "dark_red") and (c_curr == "light_red")
                   and (sig_val < 0))
 
-    if not (green_signal or red_signal):
+    if not (green_signal or green2_signal or red_signal):
         if c_prev == "dark_green" and c_curr == "light_green":
             log("  Смена тёмно-зелёной -> светлозелёная есть — "
                 "но она не считается? (это сообщение не должно появляться)")
@@ -308,8 +313,13 @@ def process_ticker(ticker: str, tf: str, fast: int, slow: int, state: dict) -> N
         log(f"  Сигнал по свече {candle_time} уже отправлялся — пропуск.")
         return
 
-    direction = "GREEN" if green_signal else "RED"
-    sig_note = "" if green_signal else " | signal(9) < 0"
+    if green_signal:
+        direction = "GREEN"
+    elif green2_signal:
+        direction = "GREEN2"
+    else:
+        direction = "RED"
+    sig_note = "" if (green_signal or green2_signal) else " | signal(9) < 0"
     subject = f"[{direction}] MACD {ticker} ({tf})"
     body = (
         f"Сигнал MACD (Bybit, {'формирующаяся свеча' if True else ''}).\n\n"
