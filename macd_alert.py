@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-MACD Alert Bot (Bybit, multi-ticker, ранний сигнал)
+MACD Alert Bot (Binance, multi-ticker, ранний сигнал)
 ======================================================
-Данные — Bybit spot API v5 (публичные klines, без ключа).
+Данные — Binance public market data через зеркало data-api.binance.vision
+(публичные klines, без ключа, без геоблокировки для облачных IP).
 
 Сигнал на свече за LEAD_MINUTES минут до её закрытия при ОДНОВРЕМЕННОМ
 выполнении условий:
@@ -19,7 +20,7 @@ MACD Alert Bot (Bybit, multi-ticker, ранний сигнал)
 
 Особенности:
   - несколько тикеров (массив в config.json), по каждому независимый анализ;
-  - ТФ напрямую из конфига (Bybit поддерживает 4h нативно, интервал 240);
+  - ТФ напрямую из конфига (Binance поддерживает 4h нативно);
   - анализ за LEAD_MINUTES минут до закрытия; после закрытия повтора не будет
     (дедупликация по "TICKER_TF" -> время свечи в state.json);
   - ошибка по одному тикеру не роняет остальные.
@@ -53,14 +54,15 @@ BASE_DIR = Path(__file__).resolve().parent
 CONFIG_PATH = BASE_DIR / "config.json"
 STATE_PATH = BASE_DIR / "state.json"
 
-BYBIT_KLINE_URL = "https://api.bybit.com/v5/market/kline"
+# Публичное зеркало Binance для market data — не блокирует дата-центры.
+BINANCE_KLINE_URL = "https://data-api.binance.vision/api/v3/klines"
 KLINES_LIMIT = 500  # свечей на запрос (хватит для MACD 26+9+запас)
 
-# таймфрейм -> интервал Bybit (в минутах; D/W - дни/недели)
-BYBIT_INTERVAL = {
-    "1m": "1", "3m": "3", "5m": "5", "15m": "15", "30m": "30",
-    "1h": "60", "2h": "120", "4h": "240", "6h": "360", "12h": "720",
-    "1d": "D", "1w": "W",
+# таймфрейм -> интервал Binance
+BINANCE_INTERVAL = {
+    "1m": "1m", "3m": "3m", "5m": "5m", "15m": "15m", "30m": "30m",
+    "1h": "1h", "2h": "2h", "4h": "4h", "6h": "6h", "8h": "8h",
+    "12h": "12h", "1d": "1d", "3d": "3d", "1w": "1w",
 }
 
 # длина сигнальной линии MACD
@@ -105,7 +107,7 @@ def load_config() -> dict:
     return cfg
 
 
-def to_bybit_symbol(ticker: str) -> str:
+def to_binance_symbol(ticker: str) -> str:
     """'BTC-USD' -> 'BTCUSDT', 'ETH-USDT' -> 'ETHUSDT', 'SOL' -> 'SOLUSDT'."""
     t = ticker.strip().upper()
     if t.endswith("-USD"):
@@ -161,40 +163,41 @@ def commit_state_to_repo() -> None:
 
 
 def fetch_data(ticker: str, timeframe: str) -> pd.DataFrame:
-    """Свечи с Bybit. Возвращает DataFrame с колонками
-    Open/High/Low/Close/Volume, UTC-индексом по времени открытия
-    и вычисленным close_time."""
-    symbol = to_bybit_symbol(ticker)
-    interval = BYBIT_INTERVAL.get(timeframe)
+    """Свечи с Binance (через публичное зеркало data-api.binance.vision).
+    Возвращает DataFrame с колонками Open/High/Low/Close/Volume,
+    UTC-индексом по времени открытия и close_time."""
+    symbol = to_binance_symbol(ticker)
+    interval = BINANCE_INTERVAL.get(timeframe)
     if interval is None:
-        raise RuntimeError(f"Bybit не поддерживает ТФ '{timeframe}'. "
-                           f"Допустимые: {', '.join(BYBIT_INTERVAL)}")
-    log(f"Загрузка {ticker} -> {symbol} {timeframe} (limit {KLINES_LIMIT})...")
+        raise RuntimeError(f"Binance не поддерживает ТФ '{timeframe}'. "
+                           f"Допустимые: {', '.join(BINANCE_INTERVAL)}")
+    log(f"Загрузка {ticker} -> {symbol} {timeframe} (Binance, limit {KLINES_LIMIT})...")
     r = requests.get(
-        BYBIT_KLINE_URL,
-        params={"category": "spot", "symbol": symbol,
-                "interval": interval, "limit": KLINES_LIMIT},
+        BINANCE_KLINE_URL,
+        params={"symbol": symbol, "interval": interval, "limit": KLINES_LIMIT},
         timeout=30,
     )
     if r.status_code != 200:
-        raise RuntimeError(f"Bybit вернул HTTP {r.status_code}: {r.text[:150]}")
-    payload = r.json()
-    if payload.get("retCode") != 0:
-        raise RuntimeError(f"Bybit ошибка {payload.get('retCode')}: "
-                           f"{payload.get('retMsg')} ({symbol})")
-    rows = payload["result"]["list"]
+        raise RuntimeError(f"Binance вернул HTTP {r.status_code}: {r.text[:150]}")
+    rows = r.json()
     if not rows:
-        raise RuntimeError(f"Bybit не отдал свечи по {symbol}")
-    # Bybit отдаёт от новых к старым -> разворачиваем
-    df = pd.DataFrame(rows, columns=["open_time", "Open", "High", "Low",
-                                     "Close", "Volume", "turnover"])
+        raise RuntimeError(f"Binance не отдал свечи по {symbol}")
+
+    # Binance klines: [open_time, Open, High, Low, Close, Volume,
+    #                  close_time, quote_asset_volume, trades,
+    #                  taker_buy_base, taker_buy_quote, ignore]
+    df = pd.DataFrame(rows, columns=[
+        "open_time", "Open", "High", "Low", "Close", "Volume",
+        "close_time", "qav", "trades", "tbb", "tbq", "ignore",
+    ])
     for c in ["Open", "High", "Low", "Close", "Volume"]:
         df[c] = df[c].astype(float)
     df.index = pd.to_datetime(df["open_time"].astype("int64"),
                               unit="ms", utc=True)
     df = df.sort_index()
-    # Bybit не отдаёт close_time -> считаем сами
-    df["close_time"] = df.index + pd.Timedelta(seconds=TF_SECONDS[timeframe])
+    df["close_time"] = pd.to_datetime(
+        df["close_time"].astype("int64"), unit="ms", utc=True
+    )
     return df[["Open", "High", "Low", "Close", "Volume", "close_time"]]
 
 
@@ -202,7 +205,7 @@ def prepare_candle(df: pd.DataFrame, timeframe: str):
     """Выбираем свечу для анализа по времени закрытия свечи.
 
     - свеча уже закрылась             -> анализируем её как есть;
-    - до закрытия <= LEAD_MINUTES     -> анализируем ФОРМИРУЮЩУЮСЮ свечу;
+    - до закрытия <= LEAD_MINUTES     -> анализируем ФОРМИРУЮЩУЮСЯ свечу;
     - до закрытия больше              -> рано, тикер пропускаем.
     Возвращает DataFrame или None (пропуск)."""
     close_time = df["close_time"].iloc[-1]
@@ -322,9 +325,9 @@ def process_ticker(ticker: str, tf: str, fast: int, slow: int, state: dict) -> N
     sig_note = "" if (green_signal or green2_signal) else " | signal(9) < 0"
     subject = f"[{direction}] MACD {ticker} ({tf})"
     body = (
-        f"Сигнал MACD (Bybit, {'формирующаяся свеча' if True else ''}).\n\n"
+        f"Сигнал MACD (Binance, формирующаяся свеча).\n\n"
         f"Тикер:         {ticker}\n"
-        f"Bybit:         {to_bybit_symbol(ticker)}\n"
+        f"Binance:       {to_binance_symbol(ticker)}\n"
         f"Таймфрейм:     {tf}\n"
         f"Свеча (UTC):   {candle_time}\n"
         f"Цена:          {price:.2f}\n"
@@ -359,7 +362,7 @@ def main() -> None:
     slow = int(cfg.get("macd_slow", cfg.get("slow", 26)))
 
     log(f"Тикеров: {len(tickers)} | ТФ: {tf} | MACD({fast},{slow},{SIGNAL_LEN}) | "
-        f"источник: Bybit | ранний сигнал: за {LEAD_MINUTES} мин до закрытия")
+        f"источник: Binance | ранний сигнал: за {LEAD_MINUTES} мин до закрытия")
 
     state = load_state()
     any_signal = False
