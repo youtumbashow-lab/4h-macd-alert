@@ -1,12 +1,15 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-MACD + RSI Alert Bot (Binance, multi-ticker, ранний сигнал)
-============================================================
+MACD + RSI Alert Bot (Binance, multi-ticker, по ЗАКРЫТОЙ свече)
+=================================================================
 Данные — Binance public market data через зеркало data-api.binance.vision
 (публичные klines, без ключа, без геоблокировки для облачных IP).
 
-Сигналы на свече за LEAD_MINUTES минут до её закрытия:
+Анализируется ПОСЛЕДНЯЯ ЗАКРЫТАЯ свеча. Запуск через ~1 минуту после её
+закрытия (cron `1 0,4,8,12,16,20 * * *` UTC для 4h).
+
+Сигналы на закрытой свече:
 
   MACD:
     GREEN:  смена тёмно-зелёной -> светлозелёной (hist > 0: рост сменился падением)
@@ -22,9 +25,8 @@ MACD + RSI Alert Bot (Binance, multi-ticker, ранний сигнал)
 
 Особенности:
   - несколько тикеров (массив в config.json), по каждому независимый анализ;
-  - ТФ напрямую из конфига (Binance поддерживает 4h нативно);
-  - анализ за LEAD_MINUTES минут до закрытия; после закрытия повтора не будет
-    (дедупликация по "TICKER_TF_DIRECTION" -> время свечи в state.json);
+  - ТФ напрямую из конфига;
+  - дедупликация по "TICKER_TF_DIRECTION" -> время свечи в state.json;
   - ошибка по одному тикеру не роняет остальные.
 
 config.json:
@@ -58,7 +60,7 @@ STATE_PATH = BASE_DIR / "state.json"
 
 # Публичное зеркало Binance для market data — не блокирует дата-центры.
 BINANCE_KLINE_URL = "https://data-api.binance.vision/api/v3/klines"
-KLINES_LIMIT = 500  # свечей на запрос (хватит для MACD 26+9+запас и RSI 14)
+KLINES_LIMIT = 500
 
 # таймфрейм -> интервал Binance
 BINANCE_INTERVAL = {
@@ -67,18 +69,15 @@ BINANCE_INTERVAL = {
     "12h": "12h", "1d": "1d", "3d": "3d", "1w": "1w",
 }
 
-# длина сигнальной линии MACD
 SIGNAL_LEN = 9
-
-# период RSI
 RSI_LEN = 14
 RSI_OVERBOUGHT = 70
 RSI_OVERSOLD = 30
 
-# анализируем свечу, когда до её закрытия осталось <= LEAD_MINUTES минут
-LEAD_MINUTES = 7
+# Свеча считается «закрытой» с запасом POST_CLOSE_SECONDS после её close_time.
+# Нужно, чтобы Binance успел зафиксировать свечу.
+POST_CLOSE_SECONDS = 30
 
-# длительность таймфрейма в секундах (для подстраховки таймингов)
 TF_SECONDS = {
     "1m": 60, "3m": 180, "5m": 300, "15m": 900, "30m": 1800,
     "1h": 3600, "2h": 7200, "4h": 14400, "6h": 21600, "8h": 28800,
@@ -105,7 +104,7 @@ def fail(msg: str) -> None:
 
 def load_config() -> dict:
     if not CONFIG_PATH.exists():
-        fail(f"Не найден config.json рядом со скриптом ({CONFIG_PATH})")
+        fail(f"Не найден config.json ({CONFIG_PATH})")
     with open(CONFIG_PATH, encoding="utf-8") as f:
         cfg = json.load(f)
     tf = str(cfg.get("timeframe", "4h"))
@@ -142,8 +141,6 @@ def save_state(state: dict) -> None:
 
 
 def commit_state_to_repo() -> None:
-    """В GitHub Actions сохраняем state.json обратно, чтобы при следующем
-    запуске бот знал, какие свечи уже обработаны (защита от дублей)."""
     if os.environ.get("GITHUB_ACTIONS") != "true":
         return
     try:
@@ -163,16 +160,16 @@ def commit_state_to_repo() -> None:
         if res.returncode == 0:
             log("state.json сохранён в репозиторий")
         else:
-            log(f"git push не удался (проверьте 'permissions: contents: write' "
-                f"в workflow): {res.stderr.strip()[:200]}")
+            log(f"git push не удался (проверьте 'permissions: contents: write'): "
+                f"{res.stderr.strip()[:200]}")
     except Exception as e:
         log(f"Не удалось закоммитить state.json: {e}")
 
 
 def fetch_data(ticker: str, timeframe: str) -> pd.DataFrame:
-    """Свечи с Binance (через публичное зеркало data-api.binance.vision).
-    Возвращает DataFrame с колонками Open/High/Low/Close/Volume,
-    UTC-индексом по времени открытия и close_time."""
+    """Свечи с Binance (через публичное зеркало). Возвращает DataFrame
+    с колонками Open/High/Low/Close/Volume, UTC-индексом по open_time
+    и колонкой close_time."""
     symbol = to_binance_symbol(ticker)
     interval = BINANCE_INTERVAL.get(timeframe)
     if interval is None:
@@ -205,29 +202,27 @@ def fetch_data(ticker: str, timeframe: str) -> pd.DataFrame:
     return df[["Open", "High", "Low", "Close", "Volume", "close_time"]]
 
 
-def prepare_candle(df: pd.DataFrame, timeframe: str):
-    """Выбираем свечу для анализа по времени закрытия свечи.
+def take_closed_candle(df: pd.DataFrame, timeframe: str):
+    """Оставляем только свечи, которые уже закрыты (close_time + запас <= now).
 
-    - свеча уже закрылась             -> анализируем её как есть;
-    - до закрытия <= LEAD_MINUTES     -> анализируем ФОРМИРУЮЩУЮСЯ свечу;
-    - до закрытия больше              -> рано, тикер пропускаем.
-    Возвращает DataFrame или None (пропуск)."""
-    close_time = df["close_time"].iloc[-1]
+    Возвращает DataFrame, у которого последняя строка — последняя ЗАКРЫТАЯ
+    свеча. Если после фильтрации осталось < 3 свечей — None."""
     now = pd.Timestamp.now(tz="UTC")
-    remaining_min = (close_time - now).total_seconds() / 60.0
-    if remaining_min <= 0:
-        return df  # свеча закрыта
-    if remaining_min > LEAD_MINUTES:
-        log(f"До закрытия свечи ещё {remaining_min:.0f} мин "
-            f"(> {LEAD_MINUTES}) — рано, пропуск")
+    cutoff = now - pd.Timedelta(seconds=POST_CLOSE_SECONDS)
+    closed = df[df["close_time"] <= cutoff]
+    if len(closed) < 3:
+        log(f"Закрытых свечей пока {len(closed)} (< 3) — пропуск")
         return None
-    log(f"До закрытия свечи {remaining_min:.1f} мин — анализируем формирующуюся")
-    return df
+
+    last_close = closed["close_time"].iloc[-1]
+    age_sec = (now - last_close).total_seconds()
+    log(f"Последняя закрытая свеча: {closed.index[-1]} "
+        f"(закрылась {age_sec:.0f} сек назад)")
+    return closed
 
 
 def add_indicators(df: pd.DataFrame, fast: int, slow: int,
                    signal_len: int, rsi_len: int) -> pd.DataFrame:
-    """Добавляет MACD (macd/signal/hist) и RSI(rsi_len)."""
     close = df["Close"]
 
     # MACD
@@ -236,15 +231,16 @@ def add_indicators(df: pd.DataFrame, fast: int, slow: int,
     macd_line = ema_fast - ema_slow
     sig_line = macd_line.ewm(span=signal_len, adjust=False).mean()
 
-    # RSI (метод Уайлдера через EWM с alpha=1/len)
+    # RSI (метод Уайлдера)
     delta = close.diff()
     gain = delta.clip(lower=0.0)
     loss = -delta.clip(upper=0.0)
-    avg_gain = gain.ewm(alpha=1.0 / rsi_len, adjust=False, min_periods=rsi_len).mean()
-    avg_loss = loss.ewm(alpha=1.0 / rsi_len, adjust=False, min_periods=rsi_len).mean()
+    avg_gain = gain.ewm(alpha=1.0 / rsi_len, adjust=False,
+                        min_periods=rsi_len).mean()
+    avg_loss = loss.ewm(alpha=1.0 / rsi_len, adjust=False,
+                        min_periods=rsi_len).mean()
     rs = avg_gain / avg_loss
     rsi = 100.0 - (100.0 / (1.0 + rs))
-    # если avg_loss == 0 -> RSI = 100
     rsi = rsi.where(avg_loss != 0, 100.0)
 
     out = df.copy()
@@ -256,17 +252,16 @@ def add_indicators(df: pd.DataFrame, fast: int, slow: int,
 
 
 def hist_color(hist: float, hist_prev: float) -> str:
-    if hist > 0 and hist < hist_prev:   # выше нуля и падает
+    if hist > 0 and hist < hist_prev:
         return "light_green"
-    if hist > 0:                        # выше нуля и растёт
+    if hist > 0:
         return "dark_green"
-    if hist < 0 and hist > hist_prev:   # ниже нуля и растёт
+    if hist < 0 and hist > hist_prev:
         return "light_red"
-    return "dark_red"                   # ниже нуля и падает
+    return "dark_red"
 
 
 def fmt_price(price: float) -> str:
-    """Адаптивный формат цены: для дешёвых монет больше знаков."""
     if price >= 1:
         return f"{price:.2f}"
     if price >= 0.01:
@@ -291,9 +286,8 @@ def send_email(subject: str, body: str) -> None:
 
 
 def process_ticker(ticker: str, tf: str, fast: int, slow: int, state: dict) -> None:
-    """Анализ одного тикера. Ошибки не роняют остальные."""
     df = fetch_data(ticker, tf)
-    df = prepare_candle(df, tf)
+    df = take_closed_candle(df, tf)
     if df is None:
         return
 
@@ -312,18 +306,17 @@ def process_ticker(ticker: str, tf: str, fast: int, slow: int, state: dict) -> N
     c_curr = hist_color(float(curr["hist"]), float(prev["hist"]))
     c_prev = hist_color(float(prev["hist"]), float(before["hist"]))
 
-    candle_time = str(df.index[-1])  # время открытия свечи, UTC
+    candle_time = str(df.index[-1])
     price = float(curr["Close"])
     hist_val = float(curr["hist"])
     sig_val = float(curr["signal"])
     rsi_val = float(curr["rsi"]) if pd.notna(curr["rsi"]) else float("nan")
 
     rsi_str = f"{rsi_val:.2f}" if pd.notna(rsi_val) else "n/a"
-    log(f"{ticker} {tf} | свеча {candle_time} | цена {fmt_price(price)} | "
-        f"signal({SIGNAL_LEN}) {sig_val:.2f} | hist {hist_val:.4f} | "
-        f"RSI({RSI_LEN}) {rsi_str} | цвет: {c_curr}")
+    log(f"{ticker} {tf} | закрытая свеча {candle_time} | "
+        f"цена {fmt_price(price)} | signal({SIGNAL_LEN}) {sig_val:.2f} | "
+        f"hist {hist_val:.4f} | RSI({RSI_LEN}) {rsi_str} | цвет: {c_curr}")
 
-    # === ЛОГИКА СИГНАЛОВ ===
     # MACD:
     green_signal = (c_prev == "dark_green") and (c_curr == "light_green")
     green2_signal = (c_prev == "light_green") and (c_curr == "dark_green")
@@ -334,7 +327,6 @@ def process_ticker(ticker: str, tf: str, fast: int, slow: int, state: dict) -> N
     rsi_overbought = pd.notna(rsi_val) and rsi_val > RSI_OVERBOUGHT
     rsi_oversold = pd.notna(rsi_val) and rsi_val < RSI_OVERSOLD
 
-    # какие сигналы сработали
     fired = []
     if green_signal:
         fired.append("GREEN")
@@ -348,7 +340,6 @@ def process_ticker(ticker: str, tf: str, fast: int, slow: int, state: dict) -> N
         fired.append("RSI_OVERSOLD")
 
     if not fired:
-        # диагностика как раньше
         if c_prev == "dark_red" and c_curr == "light_red" and sig_val >= 0:
             log(f"  Смена тёмно-красной -> светлокрасная есть, но signal "
                 f"{sig_val:.2f} >= 0 — фильтр не пройден.")
@@ -356,23 +347,24 @@ def process_ticker(ticker: str, tf: str, fast: int, slow: int, state: dict) -> N
             log("  Сигналов нет.")
         return
 
-    # дедупликация: ключ на тикер+ТФ+направление
     for direction in fired:
         state_key = f"{ticker}_{tf}_{direction}"
         if state.get(state_key) == candle_time:
             log(f"  {direction} по свече {candle_time} уже отправлялся — пропуск.")
             continue
 
-        # тексты
         if direction == "GREEN":
-            note = "MACD: смена тёмно-зелёной -> светлозелёной (hist > 0, рост сменился падением)"
+            note = ("MACD: смена тёмно-зелёной -> светлозелёной "
+                    "(hist > 0, рост сменился падением)")
         elif direction == "GREEN2":
-            note = "MACD: смена светлозелёной -> тёмно-зелёной (hist > 0, падение сменилось ростом)"
+            note = ("MACD: смена светлозелёной -> тёмно-зелёной "
+                    "(hist > 0, падение сменилось ростом)")
         elif direction == "RED":
-            note = "MACD: смена тёмно-красной -> светло-красной (hist < 0), signal(9) < 0"
+            note = ("MACD: смена тёмно-красной -> светло-красной (hist < 0), "
+                    "signal(9) < 0")
         elif direction == "RSI_OVERBOUGHT":
             note = f"RSI({RSI_LEN}) > {RSI_OVERBOUGHT} — перекупленность"
-        else:  # RSI_OVERSOLD
+        else:
             note = f"RSI({RSI_LEN}) < {RSI_OVERSOLD} — перепроданность"
 
         subject = f"[{direction}] {ticker} ({tf})"
@@ -382,12 +374,12 @@ def process_ticker(ticker: str, tf: str, fast: int, slow: int, state: dict) -> N
             f"Binance:       {to_binance_symbol(ticker)}\n"
             f"Таймфрейм:     {tf}\n"
             f"Свеча (UTC):   {candle_time}\n"
-            f"Цена:          {fmt_price(price)}\n"
+            f"Цена закрытия: {fmt_price(price)}\n"
             f"Цвет MACD:     {COLOR_NAMES[c_curr]}\n"
             f"signal({SIGNAL_LEN}):     {sig_val:.4f}\n"
             f"hist:          {hist_val:.6f}\n"
             f"RSI({RSI_LEN}):       {rsi_str}\n\n"
-            f"— MACD/RSI Alert Bot"
+            f"— MACD/RSI Alert Bot (закрытая свеча)"
         )
 
         send_email(subject, body)
@@ -408,7 +400,7 @@ def main() -> None:
 
     log(f"Тикеров: {len(tickers)} | ТФ: {tf} | "
         f"MACD({fast},{slow},{SIGNAL_LEN}) + RSI({RSI_LEN}) | "
-        f"источник: Binance | ранний сигнал: за {LEAD_MINUTES} мин до закрытия")
+        f"источник: Binance | режим: ЗАКРЫТАЯ свеча")
 
     state = load_state()
     any_signal = False
