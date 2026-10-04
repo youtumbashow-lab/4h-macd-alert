@@ -69,7 +69,7 @@ BINANCE_INTERVAL = {
 SIGNAL_LEN = 9
 
 # анализируем свечу, когда до её закрытия осталось <= LEAD_MINUTES минут
-LEAD_MINUTES = 250
+LEAD_MINUTES = 7
 
 # длительность таймфрейма в секундах (для подстраховки таймингов)
 TF_SECONDS = {
