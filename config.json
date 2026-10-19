@@ -1,20 +1,14 @@
 {
   "ticker": [
-    "ETH-USD",
-    "POL-USD",
-    "LINEA-USD",
-    "LTC-USD",
-    "ICP-USD",
-    "FIL-USD",
-    "DASH-USD",
-    "ETC-USD",
-    "ALGO-USD",
-    "ARB-USD",
-    "AVAX-USD",
-    "XRP-USD",
+    "BTC-USD",
+    "TRUMP-USD",
+    "DOGE-USD",
+    "DOT-USD",
     "TRX-USD",
+    "ETH-USD",
+    "LTC-USD",
     "STRK-USD",
-    "ADA-USD"
+    "APT-USD"
   ],
   "timeframe": "4h",
   "fast": 12,
