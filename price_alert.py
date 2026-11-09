@@ -7,10 +7,8 @@ Price Alert Bot (Binance, multi-ticker, 4h, «выше уровня», одно�
   - За 30 минут до закрытия 4h-свечи workflow стартует.
   - Скрипт спит до момента «за 10 минут до закрытия».
   - Берёт текущую цену с публичного Binance /api/v3/ticker/price.
-  - Для каждого включённого алерта: если price > above — шлёт письмо
+  - Для каждого включённого алерта: если price > above — шлёт письмо/ТГ
     и ставит enabled=false (алерт одноразовый, пока руками не включат).
-  - price_state.json хранит {alert_id: candle_time}, чтобы в рамках
-    одной свечи не отправить дважды, даже если запуск продублировался.
 """
 
 import json
@@ -108,7 +106,6 @@ def to_binance_symbol(ticker: str) -> str:
 
 
 def next_close_utc(tf: str) -> datetime:
-    """Ближайшее закрытие свечи tf (в UTC)."""
     step = TF_SECONDS[tf]
     now = datetime.now(timezone.utc)
     epoch = int(now.timestamp())
@@ -117,8 +114,6 @@ def next_close_utc(tf: str) -> datetime:
 
 
 def sleep_until_target(tf: str) -> datetime:
-    """Спит до момента (закрытие - TARGET_BEFORE_CLOSE_SEC).
-    Возвращает момент закрытия свечи, для которой делаем проверку."""
     close_at = next_close_utc(tf)
     target = close_at.timestamp() - TARGET_BEFORE_CLOSE_SEC
     now = time.time()
@@ -128,11 +123,9 @@ def sleep_until_target(tf: str) -> datetime:
         f"ждать {delta:.0f} сек")
 
     if delta > MAX_SLEEP_SEC:
-        log(f"До цели больше {MAX_SLEEP_SEC} сек — пропускаем запуск "
-            f"(workflow запустился слишком рано)")
+        log(f"До цели больше {MAX_SLEEP_SEC} сек — пропускаем запуск")
         sys.exit(0)
 
-    # спим с шагом 10 секунд, чтобы логи были живыми
     while True:
         remaining = target - time.time()
         if remaining <= 0:
@@ -145,7 +138,6 @@ def sleep_until_target(tf: str) -> datetime:
 
 
 def fetch_prices(symbols: list) -> dict:
-    """Один запрос к Binance — цены всех нужных символов."""
     r = requests.get(BINANCE_PRICE_URL, timeout=30)
     if r.status_code != 200:
         raise RuntimeError(f"Binance HTTP {r.status_code}: {r.text[:150]}")
@@ -182,6 +174,24 @@ def send_email(subject: str, body: str) -> None:
     with smtplib.SMTP_SSL("smtp.gmail.com", 465, context=ctx) as s:
         s.login(email_user, email_pass)
         s.send_message(msg)
+
+
+def send_telegram(message: str) -> None:
+    token = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
+    chat_id = os.environ.get("TELEGRAM_CHAT_ID", "").strip()
+    if not (token and chat_id):
+        log("Telegram не настроен — пропускаем")
+        return
+    try:
+        url = f"https://api.telegram.org/bot{token}/sendMessage"
+        payload = {"chat_id": chat_id, "text": message}
+        r = requests.post(url, json=payload, timeout=10)
+        if r.status_code == 200:
+            log("Telegram-уведомление отправлено")
+        else:
+            log(f"Telegram вернул ошибку {r.status_code}: {r.text[:150]}")
+    except Exception as e:
+        log(f"Не удалось отправить в Telegram: {e}")
 
 
 def build_email(fired: list, close_at: datetime) -> tuple:
@@ -225,11 +235,9 @@ def main() -> None:
         log("Нет включённых алертов — выходим")
         return
 
-    # 1) Спим до «за 10 минут до закрытия»
     close_at = sleep_until_target(tf)
     candle_key = close_at.strftime("%Y-%m-%d %H:%M:%S+00:00")
 
-    # 2) Цены одним запросом
     symbols = {to_binance_symbol(a["ticker"]) for a in enabled}
     log(f"Запрос цен по {len(symbols)} символам: {sorted(symbols)}")
     try:
@@ -237,7 +245,6 @@ def main() -> None:
     except Exception as e:
         fail(f"Не удалось получить цены: {e}")
 
-    # 3) Проверяем и собираем сработавшие
     state = load_json(STATE_PATH, {})
     fired = []
     for a in enabled:
@@ -250,7 +257,6 @@ def main() -> None:
             log(f"{aid}: нет цены для {sym} — пропуск")
             continue
 
-        # защита от дублей в рамках одной свечи
         if state.get(aid) == candle_key:
             log(f"{aid}: уже сработал на свече {candle_key} — пропуск")
             continue
@@ -266,22 +272,23 @@ def main() -> None:
                 "price": price,
             })
             state[aid] = candle_key
-            a["enabled"] = False  # одноразовый: выключаем навсегда
+            a["enabled"] = False
 
     if not fired:
         log("Сработавших алертов нет — письмо не отправляем")
         save_json(STATE_PATH, state)
         return
 
-    # 4) Письмо
     subject, body = build_email(fired, close_at)
+    
     try:
         send_email(subject, body)
         log(f"EMAIL ОТПРАВЛЕН: {subject}")
     except Exception as e:
-        fail(f"Не удалось отправить email: {e}")
+        log(f"Не удалось отправить email: {e}")
+    
+    send_telegram(f"🔔 {subject}\n\n{body}")
 
-    # 5) Сохраняем state + выключаем сработавшие алерты в конфиге
     save_json(STATE_PATH, state)
     save_json(CONFIG_PATH, cfg)
     commit_files_to_repo(["price_state.json", "price_config.json"])
