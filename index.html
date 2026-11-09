@@ -110,8 +110,7 @@ async function ghGetConfig() {
   const url = `https://api.github.com/repos/${OWNER}/${REPO}/contents/${CONFIG_PATH}?ref=${BRANCH}&t=${Date.now()}`;
   const r = await fetch(url, {
     headers: { 
-      'Authorization': `Bearer ${getToken()}`,
-      'Cache-Control': 'no-cache'
+      'Authorization': `Bearer ${getToken()}`
     }
   });
   if (r.status === 404) return { sha: null, data: { timeframe: '4h', alerts: [] } };
