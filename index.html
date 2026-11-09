@@ -29,7 +29,7 @@
 <body>
 
 <h1>Price Alerts</h1>
-<p class="muted">Одноразовые алерты «цена выше уровня» за 2 минуты до закрытия 4h-свечи.
+<p class="muted">Одноразовые алерты «цена выше уровня» за 10 минут до закрытия 4h-свечи.
    После срабатывания алерт выключается — включи вручную, чтобы использовать снова.</p>
 
 <fieldset style="margin-top:1.5rem">
@@ -70,7 +70,6 @@ const REPO   = '4h-macd-alert';
 const BRANCH = 'main';
 const CONFIG_PATH = 'price_config.json';
 
-// 9 пар из твоего config.json
 const TICKERS = [
   'BTC-USD','TRUMP-USD','DOGE-USD','DOT-USD','TRX-USD',
   'ETH-USD','LTC-USD','STRK-USD','APT-USD'
@@ -108,10 +107,13 @@ $('forgetToken').onclick = () => {
 };
 
 async function ghGetConfig() {
-  const r = await fetch(
-    `https://api.github.com/repos/${OWNER}/${REPO}/contents/${CONFIG_PATH}?ref=${BRANCH}`,
-    { headers: { 'Authorization': `Bearer ${getToken()}` } }
-  );
+  const url = `https://api.github.com/repos/${OWNER}/${REPO}/contents/${CONFIG_PATH}?ref=${BRANCH}&t=${Date.now()}`;
+  const r = await fetch(url, {
+    headers: { 
+      'Authorization': `Bearer ${getToken()}`,
+      'Cache-Control': 'no-cache'
+    }
+  });
   if (r.status === 404) return { sha: null, data: { timeframe: '4h', alerts: [] } };
   if (!r.ok) throw new Error(`GET ${r.status}: ${await r.text()}`);
   const j = await r.json();
@@ -181,12 +183,16 @@ async function render() {
 }
 
 async function commit(mutator, message) {
-  if (!window.__cfg) throw new Error("Конфигурация не загружена. Проверьте токен и имя репозитория.");
-  const { sha, data } = window.__cfg;
-  mutator(data);
-  await ghPutConfig(data, sha, message);
-  await render();
-  setStatus('Сохранено', 'ok');
+  setStatus('Синхронизация с GitHub…');
+  try {
+    const { sha, data } = await ghGetConfig();
+    mutator(data);
+    await ghPutConfig(data, sha, message);
+    await render();
+    setStatus('Сохранено', 'ok');
+  } catch (e) {
+    setStatus(e.message, 'err');
+  }
 }
 
 $('addBtn').onclick = async () => {
@@ -196,39 +202,30 @@ $('addBtn').onclick = async () => {
     setStatus('Введите корректную цену', 'err'); return;
   }
   const id = makeId(ticker, above);
-  setStatus('Сохранение…');
-  try {
-    await commit(d => {
-      const existing = d.alerts.find(a => a.id === id);
-      if (existing) {
-        existing.enabled = true;
-        existing.above = above;
-      } else {
-        d.alerts.push({ id, ticker, above, enabled: true });
-      }
-    }, `add alert ${id}`);
-    $('above').value = '';
-  } catch (e) { setStatus(e.message, 'err'); }
+  await commit(d => {
+    const existing = d.alerts.find(a => a.id === id);
+    if (existing) {
+      existing.enabled = true;
+      existing.above = above;
+    } else {
+      d.alerts.push({ id, ticker, above, enabled: true });
+    }
+  }, `add alert ${id}`);
+  $('above').value = '';
 };
 
 async function toggleAlert(id, enabled) {
-  setStatus('Сохранение…');
-  try {
-    await commit(d => {
-      const a = d.alerts.find(x => x.id === id);
-      if (a) a.enabled = enabled;
-    }, `toggle ${id} -> ${enabled}`);
-  } catch (e) { setStatus(e.message, 'err'); }
+  await commit(d => {
+    const a = d.alerts.find(x => x.id === id);
+    if (a) a.enabled = enabled;
+  }, `toggle ${id} -> ${enabled}`);
 }
 
 async function deleteAlert(id) {
   if (!confirm(`Удалить ${id}?`)) return;
-  setStatus('Сохранение…');
-  try {
-    await commit(d => {
-      d.alerts = d.alerts.filter(x => x.id !== id);
-    }, `delete ${id}`);
-  } catch (e) { setStatus(e.message, 'err'); }
+  await commit(d => {
+    d.alerts = d.alerts.filter(x => x.id !== id);
+  }, `delete ${id}`);
 }
 
 updateTokenStatus();
