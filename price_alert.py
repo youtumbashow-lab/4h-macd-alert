@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Price Alert Bot (Binance, multi-ticker, 4h, «выше уровня», одноразовый)
-========================================================================
+Price Alert Bot (Bybit Futures, multi-ticker, 4h, «выше уровня», одноразовый)
+=============================================================================
 Логика:
   - За 30 минут до закрытия 4h-свечи workflow стартует.
   - Скрипт спит до момента «за 10 минут до закрытия».
-  - Берёт текущую цену с публичного Binance /api/v3/ticker/price.
+  - Берёт текущую цену с публичного Bybit /v5/market/tickers (category=linear).
   - Для каждого включённого алерта: если price > above — шлёт письмо/ТГ
     и ставит enabled=false (алерт одноразовый, пока руками не включат).
 """
@@ -29,7 +29,8 @@ BASE_DIR = Path(__file__).resolve().parent
 CONFIG_PATH = BASE_DIR / "price_config.json"
 STATE_PATH = BASE_DIR / "price_state.json"
 
-BINANCE_PRICE_URL = "https://data-api.binance.vision/api/v3/ticker/price"
+# --- ИЗМЕНЕНО: Bybit Futures (Linear) API ---
+BYBIT_TICKERS_URL = "https://api.bybit.com/v5/market/tickers?category=linear"
 
 TF_SECONDS = {"4h": 4 * 3600}
 
@@ -95,7 +96,8 @@ def commit_files_to_repo(files: list) -> None:
         log(f"Ошибка при коммите: {e}")
 
 
-def to_binance_symbol(ticker: str) -> str:
+def to_bybit_symbol(ticker: str) -> str:
+    """Преобразует BTC-USD в BTCUSDT (стандарт для linear фьючерсов Bybit)"""
     t = ticker.strip().upper()
     if t.endswith("-USD"):
         return t[:-4] + "USDT"
@@ -137,18 +139,32 @@ def sleep_until_target(tf: str) -> datetime:
     return close_at
 
 
-def fetch_prices(symbols: list) -> dict:
-    r = requests.get(BINANCE_PRICE_URL, timeout=30)
+def fetch_prices_bybit(symbols: list) -> dict:
+    """Запрашивает цены с Bybit Futures (Linear)"""
+    log(f"Запрос цен с Bybit Futures (Linear) по {len(symbols)} символам...")
+    r = requests.get(BYBIT_TICKERS_URL, timeout=30)
     if r.status_code != 200:
-        raise RuntimeError(f"Binance HTTP {r.status_code}: {r.text[:150]}")
+        raise RuntimeError(f"Bybit HTTP {r.status_code}: {r.text[:150]}")
+    
     data = r.json()
-    by_symbol = {item["symbol"]: float(item["price"]) for item in data}
+    if data.get("retCode") != 0:
+        raise RuntimeError(f"Bybit API Error: {data.get('retMsg')}")
+
+    # Структура Bybit: result.list -> [ {symbol, lastPrice, ...}, ... ]
+    tickers_list = data.get("result", {}).get("list", [])
+    by_symbol = {}
+    for item in tickers_list:
+        sym = item.get("symbol")
+        price_str = item.get("lastPrice")
+        if sym and price_str:
+            by_symbol[sym] = float(price_str)
+
     result = {}
     for s in symbols:
         if s in by_symbol:
             result[s] = by_symbol[s]
         else:
-            log(f"  Внимание: {s} нет в ответе Binance")
+            log(f"  Внимание: {s} нет в ответе Bybit (возможно, это не фьючерс)")
     return result
 
 
@@ -219,7 +235,7 @@ def build_email(fired: list, close_at: datetime) -> tuple:
         lines.append(f"  Алерт «{f['id']}» теперь ВЫКЛЮЧЕН (одноразовый).")
     lines.append("")
     lines.append("=" * 60)
-    lines.append("— Price Alert Bot (одноразовый, 4h)")
+    lines.append("— Price Alert Bot (Bybit Futures, одноразовый, 4h)")
     return subject, "\n".join(lines)
 
 
@@ -238,10 +254,9 @@ def main() -> None:
     close_at = sleep_until_target(tf)
     candle_key = close_at.strftime("%Y-%m-%d %H:%M:%S+00:00")
 
-    symbols = {to_binance_symbol(a["ticker"]) for a in enabled}
-    log(f"Запрос цен по {len(symbols)} символам: {sorted(symbols)}")
+    symbols = {to_bybit_symbol(a["ticker"]) for a in enabled}
     try:
-        prices = fetch_prices(sorted(symbols))
+        prices = fetch_prices_bybit(sorted(symbols))
     except Exception as e:
         fail(f"Не удалось получить цены: {e}")
 
@@ -251,7 +266,7 @@ def main() -> None:
         aid = a["id"]
         ticker = a["ticker"]
         above = float(a["above"])
-        sym = to_binance_symbol(ticker)
+        sym = to_bybit_symbol(ticker)
         price = prices.get(sym)
         if price is None:
             log(f"{aid}: нет цены для {sym} — пропуск")
