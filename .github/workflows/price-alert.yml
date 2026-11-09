@@ -1,0 +1,51 @@
+name: Price Alert
+
+on:
+  schedule:
+    # За 20 минут до закрытия 4h-свечи (00:00/04:00/… UTC → за 20 мин до)
+    # 4h закрывается в 00:00, 04:00, 08:00, 12:00, 16:00, 20:00 UTC
+    # значит запуск в 03:40, 07:40, 11:40, 15:40, 19:40, 23:40 UTC
+    - cron: '40 3,7,11,15,19,23 * * *'
+  workflow_dispatch: {}   # ручной запуск для теста
+
+permissions:
+  contents: write
+
+concurrency:
+  group: price-alert
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Установка зависимостей
+        run: pip install --quiet -r requirements.txt
+
+      - name: Проверка цен и отправка email
+        env:
+          EMAIL_TO: ${{ secrets.EMAIL_TO }}
+          EMAIL_USER: ${{ secrets.EMAIL_USER }}
+          EMAIL_APP_PASSWORD: ${{ secrets.EMAIL_APP_PASSWORD }}
+        run: python price_alert.py
+
+      - name: Сохранить price_state.json / price_config.json
+        if: always()
+        run: |
+          git config user.name "price-alert-bot"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add price_state.json price_config.json || true
+          if git diff --cached --quiet; then
+            echo "Изменений нет"
+          else
+            git commit -m "price alert state [skip ci]"
+            git push
+          fi
