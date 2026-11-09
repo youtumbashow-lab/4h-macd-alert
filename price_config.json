@@ -1,11 +1,4 @@
 {
   "timeframe": "4h",
-  "alerts": [
-    {
-      "id": "btc-usd_75555",
-      "ticker": "BTC-USD",
-      "above": 75555,
-      "enabled": true
-    }
-  ]
+  "alerts": []
 }
