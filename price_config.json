@@ -5,13 +5,13 @@
       "id": "btc-usd_70000",
       "ticker": "BTC-USD",
       "above": 70000,
-      "enabled": true
+      "enabled": false
     },
     {
       "id": "dot-usd_0.7",
       "ticker": "DOT-USD",
       "above": 0.7,
-      "enabled": true
+      "enabled": false
     }
   ]
 }
