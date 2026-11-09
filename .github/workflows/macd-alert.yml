@@ -1,7 +1,9 @@
 name: MACD Alert
 
 on:
-  workflow_dispatch:          # ручной запуск + cron-job.org
+  workflow_dispatch:          # оставляем только ручной запуск
+  # schedule:
+  #   - cron: '1 */4 * * *'
 
 permissions:
   contents: write
