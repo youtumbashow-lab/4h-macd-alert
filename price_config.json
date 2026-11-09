@@ -6,6 +6,12 @@
       "ticker": "BTC-USD",
       "above": 70000,
       "enabled": true
+    },
+    {
+      "id": "dot-usd_0.7",
+      "ticker": "DOT-USD",
+      "above": 0.7,
+      "enabled": true
     }
   ]
 }
