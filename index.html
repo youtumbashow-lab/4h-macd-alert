@@ -157,7 +157,7 @@ async function render() {
   try {
     const { sha, data } = await ghGetConfig();
     window.__cfg = { sha, data };
-    if (!data.alerts.length) {
+    if (!data.alerts || data.alerts.length === 0) {
       tbody.innerHTML = '<tr><td colspan="5" class="muted">Пока нет алертов</td></tr>';
       return;
     }
@@ -181,6 +181,7 @@ async function render() {
 }
 
 async function commit(mutator, message) {
+  if (!window.__cfg) throw new Error("Конфигурация не загружена. Проверьте токен и имя репозитория.");
   const { sha, data } = window.__cfg;
   mutator(data);
   await ghPutConfig(data, sha, message);
