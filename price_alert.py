@@ -1,0 +1,300 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+Price Alert Bot (Binance, multi-ticker, 4h, «выше уровня», одноразовый)
+========================================================================
+Логика:
+  - За 20 минут до закрытия 4h-свечи workflow стартует.
+  - Скрипт спит до момента «за 2 минуты до закрытия».
+  - Берёт текущую цену с публичного Binance /api/v3/ticker/price.
+  - Для каждого включённого алерта: если price > above — шлёт письмо
+    и ставит enabled=false (алерт одноразовый, пока руками не включат).
+  - price_state.json хранит {alert_id: candle_time}, чтобы в рамках
+    одной свечи не отправить дважды, даже если запуск продублировался.
+
+MACD/RSI не используются. Зависимости: только requests.
+"""
+
+import json
+import os
+import smtplib
+import ssl
+import subprocess
+import sys
+import time
+from datetime import datetime, timezone
+from email.header import Header
+from email.mime.text import MIMEText
+from pathlib import Path
+
+import requests
+
+BASE_DIR = Path(__file__).resolve().parent
+CONFIG_PATH = BASE_DIR / "price_config.json"
+STATE_PATH = BASE_DIR / "price_state.json"
+
+BINANCE_PRICE_URL = "https://data-api.binance.vision/api/v3/ticker/price"
+
+TF_SECONDS = {"4h": 4 * 3600}
+
+# За сколько секунд до закрытия делаем финальную проверку
+TARGET_BEFORE_CLOSE_SEC = 2 * 60
+# Верхняя граница сна (если workflow запустился слишком рано — пропускаем)
+MAX_SLEEP_SEC = 25 * 60
+
+
+def log(msg: str) -> None:
+    stamp = datetime.now(timezone.utc).strftime("%H:%M:%S UTC")
+    print(f"[{stamp}] {msg}", flush=True)
+
+
+def fail(msg: str) -> None:
+    log(f"ОШИБКА: {msg}")
+    sys.exit(1)
+
+
+def load_json(path: Path, default: dict) -> dict:
+    if not path.exists():
+        return default
+    try:
+        with open(path, encoding="utf-8") as f:
+            return json.load(f)
+    except Exception as e:
+        log(f"Не удалось прочитать {path.name}: {e} — использую пустой")
+        return default
+
+
+def save_json(path: Path, data: dict) -> None:
+    path.write_text(
+        json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+
+
+def commit_files_to_repo(files: list) -> None:
+    if os.environ.get("GITHUB_ACTIONS") != "true":
+        return
+    try:
+        subprocess.run(["git", "config", "user.name", "price-alert-bot"],
+                       check=False, capture_output=True)
+        subprocess.run(["git", "config", "user.email",
+                        "41898282+github-actions[bot]@users.noreply.github.com"],
+                       check=False, capture_output=True)
+        for f in files:
+            subprocess.run(["git", "add", f], check=False, capture_output=True)
+        diff = subprocess.run(["git", "diff", "--cached", "--quiet"],
+                              check=False)
+        if diff.returncode == 0:
+            log("Файлы не изменились — коммит не нужен")
+            return
+        subprocess.run(["git", "commit", "-m",
+                        f"price alert state [{datetime.now(timezone.utc):%Y-%m-%d %H:%M UTC}] [skip ci]"],
+                       check=False, capture_output=True)
+        res = subprocess.run(["git", "push"], check=False,
+                             capture_output=True, text=True)
+        if res.returncode == 0:
+            log("Изменения запушены в репозиторий")
+        else:
+            log(f"git push не удался: {res.stderr.strip()[:200]}")
+    except Exception as e:
+        log(f"Ошибка при коммите: {e}")
+
+
+def to_binance_symbol(ticker: str) -> str:
+    t = ticker.strip().upper()
+    if t.endswith("-USD"):
+        return t[:-4] + "USDT"
+    t = t.replace("-", "").replace("/", "")
+    if t.endswith(("USDT", "USDC", "BTC", "ETH")):
+        return t
+    return t + "USDT"
+
+
+def next_close_utc(tf: str) -> datetime:
+    """Ближайшее закрытие свечи tf (в UTC)."""
+    step = TF_SECONDS[tf]
+    now = datetime.now(timezone.utc)
+    epoch = int(now.timestamp())
+    next_close_epoch = ((epoch // step) + 1) * step
+    return datetime.fromtimestamp(next_close_epoch, tz=timezone.utc)
+
+
+def sleep_until_target(tf: str) -> datetime:
+    """Спит до момента (закрытие - TARGET_BEFORE_CLOSE_SEC).
+    Возвращает момент закрытия свечи, для которой делаем проверку."""
+    close_at = next_close_utc(tf)
+    target = close_at.timestamp() - TARGET_BEFORE_CLOSE_SEC
+    now = time.time()
+    delta = target - now
+    log(f"Ближайшее закрытие {tf}: {close_at:%Y-%m-%d %H:%M UTC}; "
+        f"цель проверки: -{TARGET_BEFORE_CLOSE_SEC} сек; "
+        f"ждать {delta:.0f} сек")
+
+    if delta > MAX_SLEEP_SEC:
+        log(f"До цели больше {MAX_SLEEP_SEC} сек — пропускаем запуск "
+            f"(workflow запустился слишком рано)")
+        sys.exit(0)
+
+    # спим с шагом 10 секунд, чтобы логи были живыми
+    while True:
+        remaining = target - time.time()
+        if remaining <= 0:
+            break
+        time.sleep(min(10, remaining))
+        log(f"  осталось {target - time.time():.0f} сек")
+
+    log(f"Целевое время достигнуто: {datetime.now(timezone.utc):%H:%M:%S UTC}")
+    return close_at
+
+
+def fetch_prices(symbols: list) -> dict:
+    """Один запрос к Binance — цены всех нужных символов."""
+    r = requests.get(BINANCE_PRICE_URL, timeout=30)
+    if r.status_code != 200:
+        raise RuntimeError(f"Binance HTTP {r.status_code}: {r.text[:150]}")
+    data = r.json()
+    by_symbol = {item["symbol"]: float(item["price"]) for item in data}
+    result = {}
+    for s in symbols:
+        if s in by_symbol:
+            result[s] = by_symbol[s]
+        else:
+            log(f"  Внимание: {s} нет в ответе Binance")
+    return result
+
+
+def fmt_price(price: float) -> str:
+    if price >= 1:
+        return f"{price:.2f}"
+    if price >= 0.01:
+        return f"{price:.4f}"
+    return f"{price:.8f}".rstrip("0").rstrip(".")
+
+
+def send_email(subject: str, body: str) -> None:
+    email_to = os.environ.get("EMAIL_TO", "").strip()
+    email_user = os.environ.get("EMAIL_USER", "").strip()
+    email_pass = os.environ.get("EMAIL_APP_PASSWORD", "").replace(" ", "")
+    if not (email_to and email_user and email_pass):
+        raise RuntimeError("Не заданы EMAIL_TO / EMAIL_USER / EMAIL_APP_PASSWORD")
+    msg = MIMEText(body, "plain", "utf-8")
+    msg["Subject"] = Header(subject, "utf-8")
+    msg["From"] = email_user
+    msg["To"] = email_to
+    ctx = ssl.create_default_context()
+    with smtplib.SMTP_SSL("smtp.gmail.com", 465, context=ctx) as s:
+        s.login(email_user, email_pass)
+        s.send_message(msg)
+
+
+def build_email(fired: list, close_at: datetime) -> tuple:
+    n = len(fired)
+    if n == 1:
+        f = fired[0]
+        subject = f"[PRICE] {f['ticker']} > {fmt_price(f['above'])} ({f['tf']})"
+    else:
+        tickers = ", ".join(f["ticker"] for f in fired[:4])
+        if n > 4:
+            tickers += f", … (+{n - 4})"
+        subject = f"[PRICE] {n} алертов: {tickers}"
+
+    lines = []
+    lines.append(f"Сработало алертов: {n}")
+    lines.append(f"Закрытие свечи:    {close_at:%Y-%m-%d %H:%M UTC}")
+    lines.append("")
+    lines.append("=" * 60)
+    for f in fired:
+        lines.append("")
+        lines.append(f"{f['ticker']} ({f['tf']})")
+        lines.append("-" * 60)
+        lines.append(f"  Условие:  цена > {fmt_price(f['above'])}")
+        lines.append(f"  Текущая:  {fmt_price(f['price'])}")
+        lines.append(f"  Алерт «{f['id']}» теперь ВЫКЛЮЧЕН (одноразовый).")
+    lines.append("")
+    lines.append("=" * 60)
+    lines.append("— Price Alert Bot (одноразовый, 4h)")
+    return subject, "\n".join(lines)
+
+
+def main() -> None:
+    cfg = load_json(CONFIG_PATH, {"timeframe": "4h", "alerts": []})
+    tf = cfg.get("timeframe", "4h")
+    if tf not in TF_SECONDS:
+        fail(f"Поддерживается только timeframe из {list(TF_SECONDS)}")
+
+    alerts = cfg.get("alerts", [])
+    enabled = [a for a in alerts if a.get("enabled")]
+    if not enabled:
+        log("Нет включённых алертов — выходим")
+        return
+
+    # 1) Спим до «за 2 минуты до закрытия»
+    close_at = sleep_until_target(tf)
+    candle_key = close_at.strftime("%Y-%m-%d %H:%M:%S+00:00")
+
+    # 2) Цены одним запросом
+    symbols = {to_binance_symbol(a["ticker"]) for a in enabled}
+    log(f"Запрос цен по {len(symbols)} символам: {sorted(symbols)}")
+    try:
+        prices = fetch_prices(sorted(symbols))
+    except Exception as e:
+        fail(f"Не удалось получить цены: {e}")
+
+    # 3) Проверяем и собираем сработавшие
+    state = load_json(STATE_PATH, {})
+    fired = []
+    for a in enabled:
+        aid = a["id"]
+        ticker = a["ticker"]
+        above = float(a["above"])
+        sym = to_binance_symbol(ticker)
+        price = prices.get(sym)
+        if price is None:
+            log(f"{aid}: нет цены для {sym} — пропуск")
+            continue
+
+        # защита от дублей в рамках одной свечи
+        if state.get(aid) == candle_key:
+            log(f"{aid}: уже сработал на свече {candle_key} — пропуск")
+            continue
+
+        log(f"{aid}: {ticker} цена {fmt_price(price)} vs above {fmt_price(above)}")
+        if price > above:
+            log(f"  ✅ СРАБОТАЛ")
+            fired.append({
+                "id": aid,
+                "ticker": ticker,
+                "tf": tf,
+                "above": above,
+                "price": price,
+            })
+            state[aid] = candle_key
+            a["enabled"] = False  # одноразовый: выключаем навсегда
+
+    if not fired:
+        log("Сработавших алертов нет — письмо не отправляем")
+        # всё равно сохраняем state (там могло ничего не поменяться)
+        save_json(STATE_PATH, state)
+        return
+
+    # 4) Письмо
+    subject, body = build_email(fired, close_at)
+    try:
+        send_email(subject, body)
+        log(f"EMAIL ОТПРАВЛЕН: {subject}")
+    except Exception as e:
+        fail(f"Не удалось отправить email: {e}")
+
+    # 5) Сохраняем state + выключаем сработавшие алерты в конфиге
+    save_json(STATE_PATH, state)
+    save_json(CONFIG_PATH, cfg)
+    commit_files_to_repo(["price_state.json", "price_config.json"])
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except SystemExit:
+        raise
+    except Exception as e:
+        log(f"Непредвиденная ошибка: {e}")
+        sys.exit(1)
