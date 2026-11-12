@@ -153,7 +153,7 @@ function initCharts() {
         new TradingView.widget({
             "autosize": true,
             "symbol": symbol,
-            "interval": "240", // 4h
+            "interval": "240",
             "timezone": "Etc/UTC",
             "theme": "dark",
             "style": "1",
@@ -163,36 +163,25 @@ function initCharts() {
             "allow_symbol_change": false,
             "container_id": `tv_chart_${index}`,
             "studies": [
-                "MAExp@tv-basicstudies",   // EMA
-                "MACD@tv-basicstudies"     // MACD
+                // ЕМА 200
+                {
+                    id: "MAExp@tv-basicstudies",
+                    inputs: { length: 200 }
+                },
+                // MACD 12, 46, 9
+                {
+                    id: "MACD@tv-basicstudies",
+                    inputs: {
+                        fastLength: 12,
+                        slowLength: 46,
+                        signalLength: 9,
+                        oscillatorMaType: "EMA",
+                        signalMaType: "EMA"
+                    }
+                }
             ]
         });
     });
-
-    // Принудительное применение настроек через 2 секунды после загрузки
-    setTimeout(() => {
-        const tvWidgets = document.querySelectorAll('.tradingview-widget-container iframe');
-        tvWidgets.forEach((iframe) => {
-            try {
-                // Отправляем команду внутрь iframe для изменения настроек
-                iframe.contentWindow.postMessage({
-                    name: 'apply_study_overrides',
-                    overrides: {
-                        // EMA 200
-                        "moving average exponential.length": 200,
-                        // MACD 12, 46, 9
-                        "macd.fastLength": 12,
-                        "macd.slowLength": 46,
-                        "macd.signalLength": 9,
-                        "macd.oscillatorMaType": "EMA",
-                        "macd.signalMaType": "EMA"
-                    }
-                }, '*');
-            } catch (e) {
-                console.log("Не удалось применить настройки к iframe", e);
-            }
-        });
-    }, 2000);
 }
 
 function getToken() { return localStorage.getItem(tokenKey) || ''; }
