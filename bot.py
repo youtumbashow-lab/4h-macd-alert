@@ -1,21 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""
-Breakout Bot v3. 
-MACD: 12, 46, 9. Отправка на почту + ТГ, отключение MACD после стопа.
-"""
-
-import json
-import os
-import smtplib
-import ssl
-import subprocess
-import sys
+import json, os, smtplib, ssl, subprocess, sys
 from datetime import datetime, timezone
 from email.header import Header
 from email.mime.text import MIMEText
 from pathlib import Path
-
 import requests
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -34,10 +23,8 @@ def log(msg: str) -> None:
 def load_json(path: Path, default: dict) -> dict:
     if not path.exists(): return default
     try:
-        with open(path, encoding="utf-8") as f:
-            return json.load(f)
-    except Exception:
-        return default
+        with open(path, encoding="utf-8") as f: return json.load(f)
+    except Exception: return default
 
 def save_json(path: Path, data: dict) -> None:
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -47,35 +34,28 @@ def commit_files_to_repo(files: list) -> None:
     try:
         subprocess.run(["git", "config", "user.name", "breakout-bot"], check=False, capture_output=True)
         subprocess.run(["git", "config", "user.email", "41898282+github-actions[bot]@users.noreply.github.com"], check=False, capture_output=True)
-        for f in files:
-            subprocess.run(["git", "add", f], check=False, capture_output=True)
+        for f in files: subprocess.run(["git", "add", f], check=False, capture_output=True)
         diff = subprocess.run(["git", "diff", "--cached", "--quiet"], check=False)
         if diff.returncode != 0:
             subprocess.run(["git", "commit", "-m", f"bot state update [{datetime.now(timezone.utc):%Y-%m-%d %H:%M UTC}] [skip ci]"], check=False, capture_output=True)
             subprocess.run(["git", "push"], check=False, capture_output=True)
-    except Exception as e:
-        log(f"Ошибка при коммите: {e}")
+    except Exception as e: log(f"Ошибка при коммите: {e}")
 
 def send_telegram(message: str) -> None:
     token = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
     chat_id = os.environ.get("TELEGRAM_CHAT_ID", "").strip()
-    if not (token and chat_id):
-        log("Telegram не настроен — пропускаем")
-        return
+    if not (token and chat_id): return log("Telegram не настроен")
     try:
         url = f"https://api.telegram.org/bot{token}/sendMessage"
         requests.post(url, json={"chat_id": chat_id, "text": message}, timeout=10)
-        log("Telegram-уведомление отправлено")
-    except Exception as e:
-        log(f"Не удалось отправить в Telegram: {e}")
+        log("Telegram отправлен")
+    except Exception as e: log(f"Ошибка ТГ: {e}")
 
 def send_email(subject: str, body: str) -> None:
     email_to = os.environ.get("EMAIL_TO", "").strip()
     email_user = os.environ.get("EMAIL_USER", "").strip()
     email_pass = os.environ.get("EMAIL_APP_PASSWORD", "").replace(" ", "")
-    if not (email_to and email_user and email_pass):
-        log("Email не настроен — пропускаем")
-        return
+    if not (email_to and email_user and email_pass): return log("Email не настроен")
     try:
         msg = MIMEText(body, "plain", "utf-8")
         msg["Subject"] = Header(subject, "utf-8")
@@ -86,196 +66,111 @@ def send_email(subject: str, body: str) -> None:
             s.login(email_user, email_pass)
             s.send_message(msg)
         log("EMAIL отправлен")
-    except Exception as e:
-        log(f"Не удалось отправить email: {e}")
+    except Exception as e: log(f"Ошибка Email: {e}")
 
 def get_klines(symbol, interval, limit=100):
     r = requests.get(BINANCE_KLINE_URL, params={"symbol": symbol, "interval": interval, "limit": limit}, timeout=30)
-    if r.status_code != 200:
-        raise RuntimeError(f"Binance HTTP {r.status_code}")
+    if r.status_code != 200: raise RuntimeError(f"Binance HTTP {r.status_code}")
     return r.json()
 
 def calculate_macd_signal(klines):
-    """Считает MACD (12, 46, 9) по закрытым свечам"""
     closes = [float(k[4]) for k in klines]
-    
-    # EMA 12
-    ema12 = [closes[0]]
-    alpha12 = 2 / (12 + 1)
-    for c in closes[1:]:
-        ema12.append(c * alpha12 + ema12[-1] * (1 - alpha12))
-        
-    # EMA 46 (изменено с 26 на 46)
-    ema46 = [closes[0]]
-    alpha46 = 2 / (46 + 1)
-    for c in closes[1:]:
-        ema46.append(c * alpha46 + ema46[-1] * (1 - alpha46))
-        
-    # MACD line
+    ema12 = [closes[0]]; alpha12 = 2/(12+1)
+    for c in closes[1:]: ema12.append(c * alpha12 + ema12[-1] * (1 - alpha12))
+    ema46 = [closes[0]]; alpha46 = 2/(46+1)
+    for c in closes[1:]: ema46.append(c * alpha46 + ema46[-1] * (1 - alpha46))
     macd_line = [e12 - e46 for e12, e46 in zip(ema12, ema46)]
-    
-    # Signal line (EMA 9 от MACD)
-    signal = [macd_line[0]]
-    alpha9 = 2 / (9 + 1)
-    for m in macd_line[1:]:
-        signal.append(m * alpha9 + signal[-1] * (1 - alpha9))
-        
+    signal = [macd_line[0]]; alpha9 = 2/(9+1)
+    for m in macd_line[1:]: signal.append(m * alpha9 + signal[-1] * (1 - alpha9))
     return signal[-1]
 
 def main():
     cfg = load_json(CONFIG_PATH, {"enabled": False})
-    if not cfg.get("enabled"):
-        log("Бот выключен. Выходим.")
-        return
-
+    if not cfg.get("enabled"): return log("Бот выключен")
     state = load_json(STATE_PATH, {})
     if "active_trades" not in state: state["active_trades"] = []
     if "status" not in state: state["status"] = "WAITING_NEXT_TRIGGER"
     if "macd_filter" not in state: state["macd_filter"] = True
-    
+    if "last_trigger_date" not in state: state["last_trigger_date"] = ""
     save_json(STATE_PATH, state)
-    
-    log(f"Текущий статус из state.json: {state['status']}")
-    log(f"Активных сделок: {len(state['active_trades'])}")
     
     now = datetime.now(timezone.utc).timestamp() * 1000
     klines_4h = get_klines(SYMBOL, TF_4H, limit=100)
     closed_4h = [k for k in klines_4h if k[6] < now]
+    if len(closed_4h) < 2: return log("Мало свечей")
     
-    if len(closed_4h) < 2:
-        log(f"Мало закрытых 4h свечей ({len(closed_4h)} шт.). Ждем следующего запуска.")
-        return
-
     last_candle = closed_4h[-1]
     close_time = datetime.fromtimestamp(last_candle[6]/1000, tz=timezone.utc)
-    high = float(last_candle[2])
-    low = float(last_candle[3])
-    close = float(last_candle[4])
+    high, low, close = float(last_candle[2]), float(last_candle[3]), float(last_candle[4])
+    log(f"Свеча {close_time:%H:%M} | H: {high} | L: {low} | C: {close}")
 
-    log(f"Последняя закрытая 4h Свеча: {close_time:%Y-%m-%d %H:%M UTC} | H: {high} | L: {low} | C: {close}")
-
-    # --- 1. ТРЕЙЛИНГ-СТОП (00:00) ---
+    # 1. ТРЕЙЛИНГ
     if close_time.hour == 0 and state["active_trades"]:
-        log("Закрытие дневной свечи. Проверяем трейлинг-стопы.")
         klines_1d = get_klines(SYMBOL, TF_1D, limit=2)
         closed_1d = [k for k in klines_1d if k[6] < now]
         if closed_1d:
             daily_low = float(closed_1d[-1][3])
-            daily_trailing_sl = round(daily_low * 0.998, 2)
-            
+            new_sl = round(daily_low * 0.998, 2)
             for trade in state["active_trades"]:
                 if trade.get("breakeven", False): continue
-                
-                entry = trade["entry_price"]
-                current_sl = trade["stop_loss"]
-                
-                if daily_trailing_sl >= entry:
-                    trade["stop_loss"] = entry
-                    trade["breakeven"] = True
-                    log(f"Сделка от {trade['date']} переведена в безубыток (SL: {entry})")
-                    msg = f"🛡️ Сделка от {trade['date']} переведена в БЕЗУБЫТОК!\nСтоп-лосс: {entry}"
-                    send_telegram(msg)
-                    send_email(f"Breakout Bot: Безубыток по сделке {trade['date']}", msg)
-                elif daily_trailing_sl > current_sl:
-                    trade["stop_loss"] = daily_trailing_sl
-                    log(f"Трейлинг-стоп для сделки от {trade['date']} обновлен: {daily_trailing_sl}")
-                    msg = f"📈 Трейлинг-стоп для сделки от {trade['date']} обновлен!\nНовый SL: {daily_trailing_sl}"
-                    send_telegram(msg)
-                    send_email(f"Breakout Bot: Трейлинг-стоп {trade['date']}", msg)
-            
+                entry, current_sl = trade["entry_price"], trade["stop_loss"]
+                if new_sl >= entry:
+                    trade["stop_loss"], trade["breakeven"] = entry, True
+                    msg = f"🛡️ Безубыток по сделке {trade['date']}: {entry}"
+                    send_telegram(msg); send_email("Безубыток", msg)
+                elif new_sl > current_sl:
+                    trade["stop_loss"] = new_sl
+                    msg = f"📈 Трейлинг-стоп {trade['date']}: {new_sl}"
+                    send_telegram(msg); send_email("Трейлинг", msg)
             save_json(STATE_PATH, state)
-            commit_files_to_repo(["bot_state.json"])
 
-    # --- 2. СТОП-ЛОССЫ ---
+    # 2. СТОП
     for trade in list(state["active_trades"]):
         if low <= trade["stop_loss"]:
-            log(f"СТОП-ЛОСС по сделке от {trade['date']}!")
-            msg = f"🔴 СТОП-ЛОСС по сделке от {trade['date']} сработал на {trade['stop_loss']}."
-            send_telegram(msg)
-            send_email(f"Breakout Bot: СТОП-ЛОСС {trade['date']}", msg)
+            msg = f"🔴 СТОП-ЛОСС {trade['date']} на {trade['stop_loss']}"
+            send_telegram(msg); send_email("СТОП-ЛОСС", msg)
             state["active_trades"].remove(trade)
-            
             state["macd_filter"] = False
-            log("Фильтр MACD отключен на 1 следующий триггер.")
-            
             save_json(STATE_PATH, state)
             commit_files_to_repo(["bot_state.json"])
 
-    # --- 3. ТРИГГЕР (16:00) ---
-    if close_time.hour == 16:
-        macd_signal = calculate_macd_signal(closed_4h)
+    # 3. ТРИГГЕР (16:00) - проверяем, если свеча 16:00, и мы её ещё не обрабатывали
+    trigger_date_str = close_time.strftime("%Y-%m-%d")
+    if close_time.hour == 16 and state["last_trigger_date"] != trigger_date_str:
+        state["last_trigger_date"] = trigger_date_str
         
-        if state["macd_filter"]:
-            log(f"Триггер 16:00. Фильтр MACD ВКЛЮЧЕН. Signal(12,46,9) = {macd_signal:.4f}")
-            condition_met = macd_signal < 0
-        else:
-            log(f"Триггер 16:00. Фильтр MACD ОТКЛЮЧЕН (после стопа). Ставим триггер без проверки.")
-            condition_met = True
-
+        # Проверяем MACD
+        macd_signal = calculate_macd_signal(closed_4h)
+        condition_met = state["macd_filter"] and (macd_signal < 0) or not state["macd_filter"]
+        
         if condition_met:
-            state["status"] = "WAITING_BREAKOUT"
-            state["trigger_high"] = high
-            state["trigger_date"] = close_time.strftime("%Y-%m-%d")
+            state["status"], state["trigger_high"], state["trigger_date"] = "WAITING_BREAKOUT", high, trigger_date_str
             save_json(STATE_PATH, state)
-            
-            msg = f"🔔 Новый триггер (16:00 UTC)\nУровень (High): {high}\n"
-            if state["macd_filter"]: msg += f"MACD Signal(12,46,9): {macd_signal:.4f} (< 0)\n"
-            else: msg += f"MACD фильтр пропущен (после стопа).\n"
-            msg += "Ждем закрытия выше."
-            
-            send_telegram(msg)
-            send_email(f"Breakout Bot: Новый триггер {close_time.strftime('%Y-%m-%d')}", msg)
-            commit_files_to_repo(["bot_state.json"])
+            msg = f"🔔 Триггер {trigger_date_str}: {high}\nMACD: {macd_signal:.4f}"
+            send_telegram(msg); send_email("Триггер", msg)
         else:
-            log(f"MACD Signal >= 0 ({macd_signal:.4f}). Триггер отменен.")
-            msg = f"⚠️ Триггер 16:00 отменен.\nMACD Signal(12,46,9) = {macd_signal:.4f} (должен быть < 0)."
-            send_telegram(msg)
-            send_email("Breakout Bot: Триггер отменен", msg)
             state["status"] = "WAITING_NEXT_TRIGGER"
+            msg = f"⚠️ Триггер {trigger_date_str} отменен. MACD: {macd_signal:.4f}"
+            send_telegram(msg); send_email("Отмена", msg)
             save_json(STATE_PATH, state)
-            commit_files_to_repo(["bot_state.json"])
         return
 
-    # --- 4. ЛОГИКА ВХОДА ---
-    if state["status"] == "WAITING_BREAKOUT":
-        if close > state["trigger_high"]:
-            log(f"ПРОБОЙ! Close {close} > {state['trigger_high']}")
-            state["status"] = "WAITING_RETEST"
-            save_json(STATE_PATH, state)
-            msg = f"🚀 ПРОБОЙ!\nСвеча закрылась выше {state['trigger_high']}.\nЖдем ретеста к уровню."
-            send_telegram(msg)
-            send_email("Breakout Bot: Пробой", msg)
-            commit_files_to_repo(["bot_state.json"])
-        else:
-            log(f"Пробоя нет. Close {close} <= {state['trigger_high']}. Ждем.")
+    # 4. ВХОД
+    if state["status"] == "WAITING_BREAKOUT" and close > state["trigger_high"]:
+        state["status"] = "WAITING_RETEST"
+        save_json(STATE_PATH, state)
+        msg = f"🚀 ПРОБОЙ! {state['trigger_high']}"
+        send_telegram(msg); send_email("Пробой", msg)
 
-    elif state["status"] == "WAITING_RETEST":
-        if low <= state["trigger_high"]:
-            stop_loss = round(state["trigger_high"] * 0.98, 2)
-            
-            new_trade = {
-                "date": state["trigger_date"],
-                "entry_price": state["trigger_high"],
-                "stop_loss": stop_loss,
-                "breakeven": False
-            }
-            state["active_trades"].append(new_trade)
-            state["status"] = "WAITING_NEXT_TRIGGER"
-            
-            state["macd_filter"] = True 
-            log("Сделка открыта. Фильтр MACD включен.")
-            
-            msg = f"🟢 СДЕЛКА БАЙ!\nЦена вернулась к уровню {new_trade['entry_price']}.\nСтоп-лосс установлен на {stop_loss} (-2%)."
-            send_telegram(msg)
-            send_email("Breakout Bot: Сделка БАЙ", msg)
-            
-            del state["trigger_high"]
-            del state["trigger_date"]
-            
-            save_json(STATE_PATH, state)
-            commit_files_to_repo(["bot_state.json"])
-        else:
-            log(f"Ретеста нет. Low {low} > {state['trigger_high']}. Ждем.")
+    elif state["status"] == "WAITING_RETEST" and low <= state["trigger_high"]:
+        new_trade = {"date": state["trigger_date"], "entry_price": state["trigger_high"], "stop_loss": round(state["trigger_high"]*0.98, 2), "breakeven": False}
+        state["active_trades"].append(new_trade)
+        state["status"], state["macd_filter"] = "WAITING_NEXT_TRIGGER", True
+        msg = f"🟢 БАЙ {new_trade['entry_price']}, SL {new_trade['stop_loss']}"
+        send_telegram(msg); send_email("БАЙ", msg)
+        del state["trigger_high"], state["trigger_date"]
+        save_json(STATE_PATH, state)
+        commit_files_to_repo(["bot_state.json"])
 
 if __name__ == "__main__":
     main()
