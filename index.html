@@ -163,23 +163,18 @@ function initCharts() {
             "allow_symbol_change": false,
             "container_id": `tv_chart_${index}`,
             "studies": [
-                // ЕМА 200
-                {
-                    id: "MAExp@tv-basicstudies",
-                    inputs: { length: 200 }
-                },
-                // MACD 12, 46, 9
-                {
-                    id: "MACD@tv-basicstudies",
-                    inputs: {
-                        fastLength: 12,
-                        slowLength: 46,
-                        signalLength: 9,
-                        oscillatorMaType: "EMA",
-                        signalMaType: "EMA"
-                    }
-                }
-            ]
+                "MAExp@tv-basicstudies", // EMA
+                "MACD@tv-basicstudies"   // MACD
+            ],
+            // Используем встроенный механизм переопределения
+            "studies_overrides": {
+                "moving average exponential.length": 200,
+                "MACD.fastLength": 12,
+                "MACD.slowLength": 46,
+                "MACD.signalLength": 9,
+                "MACD.oscillatorMaType": "EMA",
+                "MACD.signalMaType": "EMA"
+            }
         });
     });
 }
