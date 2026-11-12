@@ -103,6 +103,9 @@ def main():
     if "status" not in state: state["status"] = "WAITING_NEXT_TRIGGER"
     if "macd_filter" not in state: state["macd_filter"] = True
     
+    # Сохраняем начальное состояние, чтобы сайт его увидел
+    save_json(STATE_PATH, state)
+    
     log(f"Текущий статус из state.json: {state['status']}")
     log(f"Активных сделок: {len(state['active_trades'])}")
     
