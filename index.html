@@ -21,7 +21,6 @@
   .btn-off:active { background: #c42b38; }
   .btn-disabled { opacity: 0.4; pointer-events: none; }
   
-  /* На мобилках кнопки на всю ширину */
   @media (max-width: 600px) {
     .btn-group { display: flex; flex-direction: column; gap: 0.5rem; width: 100%; margin-top: 1rem; }
     button { width: 100%; padding: 0.9rem; font-size: 1rem; }
@@ -67,7 +66,6 @@
 <div class="container">
   <h1>Breakout Bot (4H)</h1>
 
-  <!-- Блок управления -->
   <div class="card">
     <div class="row" style="justify-content: center; text-align: center;">
       <span style="font-size: 1rem; font-weight: 600;">Статус бота:</span>
@@ -103,7 +101,6 @@
     <p id="globalStatus" class="muted"></p>
   </div>
 
-  <!-- График TradingView -->
   <div class="card">
     <h2 style="font-size: 1.1rem; margin-top: 0; margin-bottom: 1rem; text-align: center;">BTC/USDT (4H)</h2>
     <div id="tv_chart_container"></div>
@@ -112,9 +109,8 @@
 
 <script type="text/javascript" src="https://s3.tradingview.com/tv.js"></script>
 <script>
-// --- НАСТРОЙКИ ---
-const OWNER  = 'youtumbashow-lab';   // Твой логин GitHub
-const REPO   = '4h-macd-alert';      // Твой репозиторий
+const OWNER  = 'youtumbashow-lab';
+const REPO   = '4h-macd-alert';
 const BRANCH = 'main';
 const CONFIG_PATH = 'bot_config.json';
 const STATE_PATH  = 'bot_state.json';
@@ -122,7 +118,6 @@ const STATE_PATH  = 'bot_state.json';
 const $ = id => document.getElementById(id);
 const tokenKey = 'gh_pat_bot_dashboard';
 
-// --- ИНИЦИАЛИЗАЦИЯ ГРАФИКА ---
 function initChart() {
     new TradingView.widget({
         "autosize": true,
@@ -140,7 +135,6 @@ function initChart() {
     });
 }
 
-// --- РАБОТА С GITHUB API ---
 function getToken() { return localStorage.getItem(tokenKey) || ''; }
 function updateTokenStatus() {
     const t = getToken();
@@ -182,7 +176,6 @@ async function putFile(path, data, sha, message) {
     return r.json();
 }
 
-// --- ЛОГИКА ДАШБОРДА ---
 async function loadDashboard() {
     if (!getToken()) {
         $('botStatusBadge').textContent = 'Нет токена';
@@ -208,17 +201,18 @@ async function loadDashboard() {
         }
 
         const { data: state } = await getFile(STATE_PATH);
-        if (state) {
+        
+        // ЗАЩИТА ОТ ПУСТОГО ФАЙЛА ИЛИ ОТСУТСТВИЯ СТАТУСА
+        if (state && state.status) {
             $('botInfo').style.display = 'block';
             
-            // Перевод статусов на русский для удобства
             const statusMap = {
                 "WAITING_NEXT_TRIGGER": "Ждет триггер (16:00)",
                 "WAITING_BREAKOUT": "Ждет пробоя",
                 "WAITING_RETEST": "Ждет ретеста",
                 "IN_TRADE": "В сделке"
             };
-            $('infoState').textContent = statusMap[state.status] || state.status || '-';
+            $('infoState').textContent = statusMap[state.status] || state.status;
             
             if (state.trigger_high) {
                 $('triggerInfo').style.display = 'block';
@@ -243,7 +237,11 @@ async function loadDashboard() {
                 badge.classList.add('status-waiting');
             }
         } else {
-            $('botInfo').style.display = 'none';
+            // Если файл пустой или в нем нет статуса
+            $('botInfo').style.display = 'block';
+            $('infoState').textContent = 'Ожидание первого запуска бота';
+            $('triggerInfo').style.display = 'none';
+            $('activeTradesList').innerHTML = 'Нет активных сделок';
         }
 
         $('globalStatus').textContent = 'Обновлено: ' + new Date().toLocaleTimeString();
@@ -276,7 +274,6 @@ async function setBotState(enable) {
     }
 }
 
-// --- СТАРТ ---
 document.addEventListener('DOMContentLoaded', () => {
     initChart();
     updateTokenStatus();
