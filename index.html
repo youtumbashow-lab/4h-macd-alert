@@ -8,8 +8,8 @@
   :root { color-scheme: dark; }
   * { box-sizing: border-box; }
   body { font-family: system-ui, -apple-system, sans-serif; background: #131722; color: #d1d4dc; margin: 0; padding: 0.5rem; }
-  .container { max-width: 1200px; margin: 0 auto; }
-  h1 { font-size: 1.2rem; color: #fff; margin: 0.5rem 0 1rem 0; text-align: center; }
+  .container { max-width: 1400px; margin: 0 auto; }
+  h1 { font-size: 1.3rem; color: #fff; margin: 0.5rem 0 1rem 0; text-align: center; }
   
   .card { background: #1e222d; border: 1px solid #2a2e39; border-radius: 8px; padding: 1rem; margin-bottom: 1rem; }
   .row { display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; }
@@ -41,9 +41,25 @@
   .info-label { font-size: 0.75rem; color: #787b86; margin-bottom: 0.3rem; text-transform: uppercase; letter-spacing: 0.5px; }
   .info-value { font-size: 1.1rem; font-weight: 600; color: #fff; }
 
-  #tv_chart_container { height: 450px; width: 100%; border-radius: 8px; overflow: hidden; border: 1px solid #2a2e39; }
-  @media (min-width: 600px) {
-    #tv_chart_container { height: 600px; }
+  /* Сетка для графиков */
+  .charts-grid { display: grid; grid-template-columns: 1fr; gap: 1rem; margin-top: 1rem; }
+  @media (min-width: 800px) {
+    .charts-grid { grid-template-columns: 1fr 1fr; }
+  }
+  @media (min-width: 1200px) {
+    .charts-grid { grid-template-columns: 1fr 1fr 1fr; }
+  }
+
+  .chart-container { 
+    height: 350px; 
+    width: 100%; 
+    border-radius: 8px; 
+    overflow: hidden; 
+    border: 1px solid #2a2e39; 
+    background: #131722;
+  }
+  @media (min-width: 800px) {
+    .chart-container { height: 400px; }
   }
   
   .token-area { display: flex; flex-direction: column; gap: 0.5rem; margin-top: 1rem; }
@@ -64,8 +80,9 @@
 <body>
 
 <div class="container">
-  <h1>Breakout Bot (4H)</h1>
+  <h1>Breakout Bot Dashboard</h1>
 
+  <!-- Панель управления -->
   <div class="card">
     <div class="row" style="justify-content: center; text-align: center;">
       <span style="font-size: 1rem; font-weight: 600;">Статус бота:</span>
@@ -101,9 +118,12 @@
     <p id="globalStatus" class="muted"></p>
   </div>
 
+  <!-- Сетка графиков -->
   <div class="card">
-    <h2 style="font-size: 1.1rem; margin-top: 0; margin-bottom: 1rem; text-align: center;">BTC/USDT (4H)</h2>
-    <div id="tv_chart_container"></div>
+    <h2 style="font-size: 1.1rem; margin-top: 0; margin-bottom: 1rem; text-align: center;">Рынки (4H)</h2>
+    <div class="charts-grid" id="chartsGrid">
+      <!-- Сюда будут вставляться графики через JS -->
+    </div>
   </div>
 </div>
 
@@ -115,26 +135,48 @@ const BRANCH = 'main';
 const CONFIG_PATH = 'bot_config.json';
 const STATE_PATH  = 'bot_state.json';
 
+// Список пар для графиков (Binance тикеры)
+const SYMBOLS = [
+  "BINANCE:BTCUSDT", "BINANCE:ETHUSDT", "BINANCE:SOLUSDT",
+  "BINANCE:TRUMPUSDT", "BINANCE:DOGEUSDT", "BINANCE:DOTUSDT",
+  "BINANCE:TRXUSDT", "BINANCE:LTCUSDT", "BINANCE:STRKUSDT",
+  "BINANCE:APTUSDT", "BINANCE:ADAUSDT"
+];
+
 const $ = id => document.getElementById(id);
 const tokenKey = 'gh_pat_bot_dashboard';
 
-function initChart() {
-    new TradingView.widget({
-        "autosize": true,
-        "symbol": "BINANCE:BTCUSDT",
-        "interval": "240",
-        "timezone": "Etc/UTC",
-        "theme": "dark",
-        "style": "1",
-        "locale": "ru",
-        "enable_publishing": false,
-        "hide_side_toolbar": false,
-        "allow_symbol_change": true,
-        "container_id": "tv_chart_container",
-        "studies": ["MASimple@tv-basicstudies"]
+// --- ИНИЦИАЛИЗАЦИЯ ГРАФИКОВ ---
+function initCharts() {
+    const grid = $('chartsGrid');
+    grid.innerHTML = ''; // Очищаем перед вставкой
+
+    SYMBOLS.forEach((symbol, index) => {
+        // Создаем контейнер для каждого графика
+        const div = document.createElement('div');
+        div.className = 'chart-container';
+        div.id = `tv_chart_${index}`;
+        grid.appendChild(div);
+
+        // Вставляем виджет
+        new TradingView.widget({
+            "autosize": true,
+            "symbol": symbol,
+            "interval": "240", // 4h
+            "timezone": "Etc/UTC",
+            "theme": "dark",
+            "style": "1",
+            "locale": "ru",
+            "enable_publishing": false,
+            "hide_side_toolbar": true, // Скрываем панель рисования, чтобы не загромождать
+            "allow_symbol_change": false, // Запрещаем менять тикер, чтобы не сломать сетку
+            "container_id": `tv_chart_${index}`,
+            "studies": ["MASimple@tv-basicstudies"]
+        });
     });
 }
 
+// --- РАБОТА С GITHUB API ---
 function getToken() { return localStorage.getItem(tokenKey) || ''; }
 function updateTokenStatus() {
     const t = getToken();
@@ -202,7 +244,6 @@ async function loadDashboard() {
 
         const { data: state } = await getFile(STATE_PATH);
         
-        // ЗАЩИТА ОТ ПУСТОГО ФАЙЛА ИЛИ ОТСУТСТВИЯ СТАТУСА
         if (state && state.status) {
             $('botInfo').style.display = 'block';
             
@@ -237,7 +278,6 @@ async function loadDashboard() {
                 badge.classList.add('status-waiting');
             }
         } else {
-            // Если файл пустой или в нем нет статуса
             $('botInfo').style.display = 'block';
             $('infoState').textContent = 'Ожидание первого запуска бота';
             $('triggerInfo').style.display = 'none';
@@ -275,7 +315,7 @@ async function setBotState(enable) {
 }
 
 document.addEventListener('DOMContentLoaded', () => {
-    initChart();
+    initCharts(); // Инициализируем сетку графиков
     updateTokenStatus();
     if (getToken()) loadDashboard();
 });
