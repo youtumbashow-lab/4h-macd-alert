@@ -65,6 +65,7 @@ def send_telegram(message: str) -> None:
     try:
         url = f"https://api.telegram.org/bot{token}/sendMessage"
         requests.post(url, json={"chat_id": chat_id, "text": message}, timeout=10)
+        log("Telegram-уведомление отправлено")
     except Exception as e:
         log(f"Не удалось отправить в Telegram: {e}")
 
@@ -100,14 +101,18 @@ def main():
     state = load_json(STATE_PATH, {})
     if "active_trades" not in state: state["active_trades"] = []
     if "status" not in state: state["status"] = "WAITING_NEXT_TRIGGER"
-    # Флаг фильтра MACD (по умолчанию True)
     if "macd_filter" not in state: state["macd_filter"] = True
+    
+    log(f"Текущий статус из state.json: {state['status']}")
+    log(f"Активных сделок: {len(state['active_trades'])}")
     
     now = datetime.now(timezone.utc).timestamp() * 1000
     klines_4h = get_klines(SYMBOL, TF_4H, limit=100)
     closed_4h = [k for k in klines_4h if k[6] < now]
     
-    if len(closed_4h) < 2: return
+    if len(closed_4h) < 2:
+        log(f"Мало закрытых 4h свечей ({len(closed_4h)} шт.). Ждем следующего запуска.")
+        return
 
     last_candle = closed_4h[-1]
     close_time = datetime.fromtimestamp(last_candle[6]/1000, tz=timezone.utc)
@@ -115,7 +120,7 @@ def main():
     low = float(last_candle[3])
     close = float(last_candle[4])
 
-    log(f"4h Свеча {close_time:%H:%M UTC} | H: {high} | L: {low} | C: {close}")
+    log(f"Последняя закрытая 4h Свеча: {close_time:%Y-%m-%d %H:%M UTC} | H: {high} | L: {low} | C: {close}")
 
     # --- 1. ТРЕЙЛИНГ-СТОП (00:00) ---
     if close_time.hour == 0 and state["active_trades"]:
@@ -198,6 +203,8 @@ def main():
             save_json(STATE_PATH, state)
             send_telegram(f"🚀 ПРОБОЙ!\nСвеча закрылась выше {state['trigger_high']}.\nЖдем ретеста к уровню.")
             commit_files_to_repo(["bot_state.json"])
+        else:
+            log(f"Пробоя нет. Close {close} <= {state['trigger_high']}. Ждем.")
 
     elif state["status"] == "WAITING_RETEST":
         if low <= state["trigger_high"]:
@@ -212,7 +219,7 @@ def main():
             state["active_trades"].append(new_trade)
             state["status"] = "WAITING_NEXT_TRIGGER"
             
-            # ВКЛЮЧАЕМ ФИЛЬТР MACD ОБРАТНО (сделка висит, значит фильтр снова работает)
+            # ВКЛЮЧАЕМ ФИЛЬТР MACD ОБРАТНО
             state["macd_filter"] = True 
             log("Сделка открыта. Фильтр MACD включен.")
             
@@ -222,6 +229,8 @@ def main():
             save_json(STATE_PATH, state)
             send_telegram(f"🟢 СДЕЛКА БАЙ!\nЦена вернулась к уровню {new_trade['entry_price']}.\nСтоп-лосс установлен на {stop_loss} (-2%).")
             commit_files_to_repo(["bot_state.json"])
+        else:
+            log(f"Ретеста нет. Low {low} > {state['trigger_high']}. Ждем.")
 
 if __name__ == "__main__":
     main()
