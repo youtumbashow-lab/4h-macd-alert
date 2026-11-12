@@ -41,7 +41,6 @@
   .info-label { font-size: 0.75rem; color: #787b86; margin-bottom: 0.3rem; text-transform: uppercase; letter-spacing: 0.5px; }
   .info-value { font-size: 1.1rem; font-weight: 600; color: #fff; }
 
-  /* Сетка для графиков */
   .charts-grid { display: grid; grid-template-columns: 1fr; gap: 1rem; margin-top: 1rem; }
   @media (min-width: 800px) {
     .charts-grid { grid-template-columns: 1fr 1fr; }
@@ -160,22 +159,40 @@ function initCharts() {
             "style": "1",
             "locale": "ru",
             "enable_publishing": false,
-            "hide_side_toolbar": true, // Скрываем панель рисования
+            "hide_side_toolbar": true,
             "allow_symbol_change": false,
             "container_id": `tv_chart_${index}`,
             "studies": [
                 "MAExp@tv-basicstudies",   // EMA
                 "MACD@tv-basicstudies"     // MACD
-            ],
-            // Настройки для индикаторов
-            "studies_overrides": {
-                "moving average exponential.length": 200, // Период EMA = 200
-                "macd.fastLength": 12,
-                "macd.slowLength": 26,
-                "macd.signalLength": 9
-            }
+            ]
         });
     });
+
+    // Принудительное применение настроек через 2 секунды после загрузки
+    setTimeout(() => {
+        const tvWidgets = document.querySelectorAll('.tradingview-widget-container iframe');
+        tvWidgets.forEach((iframe) => {
+            try {
+                // Отправляем команду внутрь iframe для изменения настроек
+                iframe.contentWindow.postMessage({
+                    name: 'apply_study_overrides',
+                    overrides: {
+                        // EMA 200
+                        "moving average exponential.length": 200,
+                        // MACD 12, 46, 9
+                        "macd.fastLength": 12,
+                        "macd.slowLength": 46,
+                        "macd.signalLength": 9,
+                        "macd.oscillatorMaType": "EMA",
+                        "macd.signalMaType": "EMA"
+                    }
+                }, '*');
+            } catch (e) {
+                console.log("Не удалось применить настройки к iframe", e);
+            }
+        });
+    }, 2000);
 }
 
 function getToken() { return localStorage.getItem(tokenKey) || ''; }
