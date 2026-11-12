@@ -100,9 +100,10 @@ def main():
     if len(closed_4h) < 2: return log("Мало свечей")
     
     last_candle = closed_4h[-1]
+    open_time = datetime.fromtimestamp(last_candle[0]/1000, tz=timezone.utc)
     close_time = datetime.fromtimestamp(last_candle[6]/1000, tz=timezone.utc)
     high, low, close = float(last_candle[2]), float(last_candle[3]), float(last_candle[4])
-    log(f"Свеча {close_time:%H:%M} | H: {high} | L: {low} | C: {close}")
+    log(f"Свеча (Открытие: {open_time:%H:%M}, Закрытие: {close_time:%H:%M}) | H: {high} | L: {low} | C: {close}")
 
     # 1. ТРЕЙЛИНГ
     if close_time.hour == 0 and state["active_trades"]:
@@ -134,12 +135,13 @@ def main():
             save_json(STATE_PATH, state)
             commit_files_to_repo(["bot_state.json"])
 
-    # 3. ТРИГГЕР (16:00) - проверяем, если свеча 16:00, и мы её ещё не обрабатывали
-    trigger_date_str = close_time.strftime("%Y-%m-%d")
-    if close_time.hour == 16 and state["last_trigger_date"] != trigger_date_str:
+    # 3. ТРИГГЕР (Свеча, открывшаяся в 12:00, закрывается в 16:00)
+    is_trigger_candle = (open_time.hour == 12)
+    trigger_date_str = open_time.strftime("%Y-%m-%d")
+    
+    if is_trigger_candle and state["last_trigger_date"] != trigger_date_str:
         state["last_trigger_date"] = trigger_date_str
         
-        # Проверяем MACD
         macd_signal = calculate_macd_signal(closed_4h)
         condition_met = state["macd_filter"] and (macd_signal < 0) or not state["macd_filter"]
         
