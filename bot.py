@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Breakout Bot v3. 
-Добавлено: отключение фильтра MACD на 1 триггер после стоп-лосса.
+Добавлено: отправка на почту + ТГ, отключение MACD после стопа.
 """
 
 import json
@@ -69,6 +69,26 @@ def send_telegram(message: str) -> None:
     except Exception as e:
         log(f"Не удалось отправить в Telegram: {e}")
 
+def send_email(subject: str, body: str) -> None:
+    email_to = os.environ.get("EMAIL_TO", "").strip()
+    email_user = os.environ.get("EMAIL_USER", "").strip()
+    email_pass = os.environ.get("EMAIL_APP_PASSWORD", "").replace(" ", "")
+    if not (email_to and email_user and email_pass):
+        log("Email не настроен — пропускаем")
+        return
+    try:
+        msg = MIMEText(body, "plain", "utf-8")
+        msg["Subject"] = Header(subject, "utf-8")
+        msg["From"] = email_user
+        msg["To"] = email_to
+        ctx = ssl.create_default_context()
+        with smtplib.SMTP_SSL("smtp.gmail.com", 465, context=ctx) as s:
+            s.login(email_user, email_pass)
+            s.send_message(msg)
+        log("EMAIL отправлен")
+    except Exception as e:
+        log(f"Не удалось отправить email: {e}")
+
 def get_klines(symbol, interval, limit=100):
     r = requests.get(BINANCE_KLINE_URL, params={"symbol": symbol, "interval": interval, "limit": limit}, timeout=30)
     if r.status_code != 200:
@@ -103,7 +123,6 @@ def main():
     if "status" not in state: state["status"] = "WAITING_NEXT_TRIGGER"
     if "macd_filter" not in state: state["macd_filter"] = True
     
-    # Сохраняем начальное состояние, чтобы сайт его увидел
     save_json(STATE_PATH, state)
     
     log(f"Текущий статус из state.json: {state['status']}")
@@ -144,11 +163,15 @@ def main():
                     trade["stop_loss"] = entry
                     trade["breakeven"] = True
                     log(f"Сделка от {trade['date']} переведена в безубыток (SL: {entry})")
-                    send_telegram(f"🛡️ Сделка от {trade['date']} переведена в БЕЗУБЫТОК!\nСтоп-лосс: {entry}")
+                    msg = f"🛡️ Сделка от {trade['date']} переведена в БЕЗУБЫТОК!\nСтоп-лосс: {entry}"
+                    send_telegram(msg)
+                    send_email(f"Breakout Bot: Безубыток по сделке {trade['date']}", msg)
                 elif daily_trailing_sl > current_sl:
                     trade["stop_loss"] = daily_trailing_sl
                     log(f"Трейлинг-стоп для сделки от {trade['date']} обновлен: {daily_trailing_sl}")
-                    send_telegram(f"📈 Трейлинг-стоп для сделки от {trade['date']} обновлен!\nНовый SL: {daily_trailing_sl}")
+                    msg = f"📈 Трейлинг-стоп для сделки от {trade['date']} обновлен!\nНовый SL: {daily_trailing_sl}"
+                    send_telegram(msg)
+                    send_email(f"Breakout Bot: Трейлинг-стоп {trade['date']}", msg)
             
             save_json(STATE_PATH, state)
             commit_files_to_repo(["bot_state.json"])
@@ -157,10 +180,11 @@ def main():
     for trade in list(state["active_trades"]):
         if low <= trade["stop_loss"]:
             log(f"СТОП-ЛОСС по сделке от {trade['date']}!")
-            send_telegram(f"🔴 СТОП-ЛОСС по сделке от {trade['date']} сработал на {trade['stop_loss']}.")
+            msg = f"🔴 СТОП-ЛОСС по сделке от {trade['date']} сработал на {trade['stop_loss']}."
+            send_telegram(msg)
+            send_email(f"Breakout Bot: СТОП-ЛОСС {trade['date']}", msg)
             state["active_trades"].remove(trade)
             
-            # ВЫКЛЮЧАЕМ ФИЛЬТР MACD
             state["macd_filter"] = False
             log("Фильтр MACD отключен на 1 следующий триггер.")
             
@@ -188,11 +212,15 @@ def main():
             if state["macd_filter"]: msg += f"MACD Signal: {macd_signal:.4f} (< 0)\n"
             else: msg += f"MACD фильтр пропущен (после стопа).\n"
             msg += "Ждем закрытия выше."
+            
             send_telegram(msg)
+            send_email(f"Breakout Bot: Новый триггер {close_time.strftime('%Y-%m-%d')}", msg)
             commit_files_to_repo(["bot_state.json"])
         else:
             log(f"MACD Signal >= 0 ({macd_signal:.4f}). Триггер отменен.")
-            send_telegram(f"⚠️ Триггер 16:00 отменен.\nMACD Signal = {macd_signal:.4f} (должен быть < 0).")
+            msg = f"⚠️ Триггер 16:00 отменен.\nMACD Signal = {macd_signal:.4f} (должен быть < 0)."
+            send_telegram(msg)
+            send_email("Breakout Bot: Триггер отменен", msg)
             state["status"] = "WAITING_NEXT_TRIGGER"
             save_json(STATE_PATH, state)
             commit_files_to_repo(["bot_state.json"])
@@ -204,7 +232,9 @@ def main():
             log(f"ПРОБОЙ! Close {close} > {state['trigger_high']}")
             state["status"] = "WAITING_RETEST"
             save_json(STATE_PATH, state)
-            send_telegram(f"🚀 ПРОБОЙ!\nСвеча закрылась выше {state['trigger_high']}.\nЖдем ретеста к уровню.")
+            msg = f"🚀 ПРОБОЙ!\nСвеча закрылась выше {state['trigger_high']}.\nЖдем ретеста к уровню."
+            send_telegram(msg)
+            send_email("Breakout Bot: Пробой", msg)
             commit_files_to_repo(["bot_state.json"])
         else:
             log(f"Пробоя нет. Close {close} <= {state['trigger_high']}. Ждем.")
@@ -222,15 +252,17 @@ def main():
             state["active_trades"].append(new_trade)
             state["status"] = "WAITING_NEXT_TRIGGER"
             
-            # ВКЛЮЧАЕМ ФИЛЬТР MACD ОБРАТНО
             state["macd_filter"] = True 
             log("Сделка открыта. Фильтр MACD включен.")
+            
+            msg = f"🟢 СДЕЛКА БАЙ!\nЦена вернулась к уровню {new_trade['entry_price']}.\nСтоп-лосс установлен на {stop_loss} (-2%)."
+            send_telegram(msg)
+            send_email("Breakout Bot: Сделка БАЙ", msg)
             
             del state["trigger_high"]
             del state["trigger_date"]
             
             save_json(STATE_PATH, state)
-            send_telegram(f"🟢 СДЕЛКА БАЙ!\nЦена вернулась к уровню {new_trade['entry_price']}.\nСтоп-лосс установлен на {stop_loss} (-2%).")
             commit_files_to_repo(["bot_state.json"])
         else:
             log(f"Ретеста нет. Low {low} > {state['trigger_high']}. Ждем.")
