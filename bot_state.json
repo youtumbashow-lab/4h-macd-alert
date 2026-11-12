@@ -1,1 +1,5 @@
-{}
+{
+  "active_trades": [],
+  "status": "WAITING_NEXT_TRIGGER",
+  "macd_filter": true
+}
