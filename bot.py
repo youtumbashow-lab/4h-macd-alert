@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Breakout Bot v3. 
-Добавлено: отправка на почту + ТГ, отключение MACD после стопа.
+MACD: 12, 46, 9. Отправка на почту + ТГ, отключение MACD после стопа.
 """
 
 import json
@@ -96,20 +96,30 @@ def get_klines(symbol, interval, limit=100):
     return r.json()
 
 def calculate_macd_signal(klines):
+    """Считает MACD (12, 46, 9) по закрытым свечам"""
     closes = [float(k[4]) for k in klines]
+    
+    # EMA 12
     ema12 = [closes[0]]
     alpha12 = 2 / (12 + 1)
     for c in closes[1:]:
         ema12.append(c * alpha12 + ema12[-1] * (1 - alpha12))
-    ema26 = [closes[0]]
-    alpha26 = 2 / (26 + 1)
+        
+    # EMA 46 (изменено с 26 на 46)
+    ema46 = [closes[0]]
+    alpha46 = 2 / (46 + 1)
     for c in closes[1:]:
-        ema26.append(c * alpha26 + ema26[-1] * (1 - alpha26))
-    macd_line = [e12 - e26 for e12, e26 in zip(ema12, ema26)]
+        ema46.append(c * alpha46 + ema46[-1] * (1 - alpha46))
+        
+    # MACD line
+    macd_line = [e12 - e46 for e12, e46 in zip(ema12, ema46)]
+    
+    # Signal line (EMA 9 от MACD)
     signal = [macd_line[0]]
     alpha9 = 2 / (9 + 1)
     for m in macd_line[1:]:
         signal.append(m * alpha9 + signal[-1] * (1 - alpha9))
+        
     return signal[-1]
 
 def main():
@@ -196,7 +206,7 @@ def main():
         macd_signal = calculate_macd_signal(closed_4h)
         
         if state["macd_filter"]:
-            log(f"Триггер 16:00. Фильтр MACD ВКЛЮЧЕН. Signal = {macd_signal:.4f}")
+            log(f"Триггер 16:00. Фильтр MACD ВКЛЮЧЕН. Signal(12,46,9) = {macd_signal:.4f}")
             condition_met = macd_signal < 0
         else:
             log(f"Триггер 16:00. Фильтр MACD ОТКЛЮЧЕН (после стопа). Ставим триггер без проверки.")
@@ -209,7 +219,7 @@ def main():
             save_json(STATE_PATH, state)
             
             msg = f"🔔 Новый триггер (16:00 UTC)\nУровень (High): {high}\n"
-            if state["macd_filter"]: msg += f"MACD Signal: {macd_signal:.4f} (< 0)\n"
+            if state["macd_filter"]: msg += f"MACD Signal(12,46,9): {macd_signal:.4f} (< 0)\n"
             else: msg += f"MACD фильтр пропущен (после стопа).\n"
             msg += "Ждем закрытия выше."
             
@@ -218,7 +228,7 @@ def main():
             commit_files_to_repo(["bot_state.json"])
         else:
             log(f"MACD Signal >= 0 ({macd_signal:.4f}). Триггер отменен.")
-            msg = f"⚠️ Триггер 16:00 отменен.\nMACD Signal = {macd_signal:.4f} (должен быть < 0)."
+            msg = f"⚠️ Триггер 16:00 отменен.\nMACD Signal(12,46,9) = {macd_signal:.4f} (должен быть < 0)."
             send_telegram(msg)
             send_email("Breakout Bot: Триггер отменен", msg)
             state["status"] = "WAITING_NEXT_TRIGGER"
