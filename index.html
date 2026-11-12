@@ -2,60 +2,81 @@
 <html lang="ru">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
 <title>Breakout Bot Dashboard</title>
 <style>
   :root { color-scheme: dark; }
-  body { font-family: system-ui, -apple-system, sans-serif; background: #131722; color: #d1d4dc; margin: 0; padding: 1rem; }
+  * { box-sizing: border-box; }
+  body { font-family: system-ui, -apple-system, sans-serif; background: #131722; color: #d1d4dc; margin: 0; padding: 0.5rem; }
   .container { max-width: 1200px; margin: 0 auto; }
-  h1 { font-size: 1.5rem; color: #fff; margin-bottom: 1rem; }
+  h1 { font-size: 1.2rem; color: #fff; margin: 0.5rem 0 1rem 0; text-align: center; }
   
-  .card { background: #1e222d; border: 1px solid #2a2e39; border-radius: 8px; padding: 1.5rem; margin-bottom: 1rem; }
-  .row { display: flex; gap: 1rem; align-items: center; flex-wrap: wrap; }
+  .card { background: #1e222d; border: 1px solid #2a2e39; border-radius: 8px; padding: 1rem; margin-bottom: 1rem; }
+  .row { display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; }
   
-  button { padding: 0.6rem 1.2rem; border: none; border-radius: 4px; font-weight: 600; cursor: pointer; transition: 0.2s; }
+  button { padding: 0.8rem 1rem; border: none; border-radius: 4px; font-weight: 600; cursor: pointer; transition: 0.2s; font-size: 0.95rem; }
   .btn-on { background: #089981; color: #fff; }
-  .btn-on:hover { background: #067a66; }
+  .btn-on:active { background: #067a66; }
   .btn-off { background: #f23645; color: #fff; }
-  .btn-off:hover { background: #c42b38; }
-  .btn-disabled { opacity: 0.5; cursor: not-allowed; }
+  .btn-off:active { background: #c42b38; }
+  .btn-disabled { opacity: 0.4; pointer-events: none; }
   
-  .status-badge { padding: 0.4rem 0.8rem; border-radius: 20px; font-size: 0.85rem; font-weight: 600; }
+  /* На мобилках кнопки на всю ширину */
+  @media (max-width: 600px) {
+    .btn-group { display: flex; flex-direction: column; gap: 0.5rem; width: 100%; margin-top: 1rem; }
+    button { width: 100%; padding: 0.9rem; font-size: 1rem; }
+    .row { justify-content: center; text-align: center; }
+  }
+  
+  .status-badge { padding: 0.4rem 0.8rem; border-radius: 20px; font-size: 0.85rem; font-weight: 600; display: inline-block; margin-top: 0.5rem; }
   .status-active { background: #08998133; color: #089981; border: 1px solid #089981; }
   .status-inactive { background: #f2364533; color: #f23645; border: 1px solid #f23645; }
   .status-waiting { background: #f7a60033; color: #f7a600; border: 1px solid #f7a600; }
   
-  .info-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-top: 1rem; }
+  .info-grid { display: grid; grid-template-columns: 1fr; gap: 0.8rem; margin-top: 1rem; }
+  @media (min-width: 600px) {
+    .info-grid { grid-template-columns: 1fr 1fr; }
+  }
+  
   .info-item { background: #131722; padding: 0.8rem; border-radius: 4px; border: 1px solid #2a2e39; }
-  .info-label { font-size: 0.8rem; color: #787b86; margin-bottom: 0.3rem; }
+  .info-label { font-size: 0.75rem; color: #787b86; margin-bottom: 0.3rem; text-transform: uppercase; letter-spacing: 0.5px; }
   .info-value { font-size: 1.1rem; font-weight: 600; color: #fff; }
 
-  #tv_chart_container { height: 600px; width: 100%; border-radius: 8px; overflow: hidden; border: 1px solid #2a2e39; }
+  #tv_chart_container { height: 450px; width: 100%; border-radius: 8px; overflow: hidden; border: 1px solid #2a2e39; }
+  @media (min-width: 600px) {
+    #tv_chart_container { height: 600px; }
+  }
   
-  .token-area { display: flex; gap: 0.5rem; margin-top: 1rem; }
-  .token-area input { flex: 1; padding: 0.5rem; border-radius: 4px; border: 1px solid #2a2e39; background: #131722; color: #d1d4dc; }
+  .token-area { display: flex; flex-direction: column; gap: 0.5rem; margin-top: 1rem; }
+  @media (min-width: 600px) {
+    .token-area { flex-direction: row; }
+  }
   
-  .muted { color: #787b86; font-size: 0.9rem; }
+  .token-area input { flex: 1; padding: 0.8rem; border-radius: 4px; border: 1px solid #2a2e39; background: #131722; color: #d1d4dc; font-size: 0.9rem; }
+  
+  .muted { color: #787b86; font-size: 0.85rem; text-align: center; margin-top: 0.5rem; }
   .err { color: #f23645; }
   .ok { color: #089981; }
+  
+  .trade-item { background: #131722; padding: 0.8rem; border-radius: 4px; margin-bottom: 0.5rem; border-left: 3px solid #f7a600; font-size: 0.9rem; }
+  .trade-item.breakeven { border-left-color: #089981; }
 </style>
 </head>
 <body>
 
 <div class="container">
-  <h1>Breakout Bot Dashboard (4H)</h1>
+  <h1>Breakout Bot (4H)</h1>
 
   <!-- Блок управления -->
   <div class="card">
-    <div class="row" style="justify-content: space-between;">
-      <div class="row">
-        <span style="font-size: 1.1rem; font-weight: 600;">Статус бота:</span>
-        <span id="botStatusBadge" class="status-badge status-inactive">Загрузка...</span>
-      </div>
-      <div class="row">
-        <button id="btnEnable" class="btn-on" onclick="setBotState(true)">Включить бота</button>
-        <button id="btnDisable" class="btn-off" onclick="setBotState(false)">Отключить бота</button>
-      </div>
+    <div class="row" style="justify-content: center; text-align: center;">
+      <span style="font-size: 1rem; font-weight: 600;">Статус бота:</span>
+      <span id="botStatusBadge" class="status-badge status-inactive">Загрузка...</span>
+    </div>
+    
+    <div class="btn-group">
+      <button id="btnEnable" class="btn-on" onclick="setBotState(true)">Включить бота</button>
+      <button id="btnDisable" class="btn-off" onclick="setBotState(false)">Отключить бота</button>
     </div>
     
     <div id="botInfo" style="display: none; margin-top: 1rem;">
@@ -65,18 +86,18 @@
           <div class="info-value" id="infoState">-</div>
         </div>
         <div class="info-item" id="triggerInfo" style="display: none;">
-          <div class="info-label">Уровень (Хай триггера)</div>
+          <div class="info-label">Хай триггера</div>
           <div class="info-value" id="infoLevel">-</div>
         </div>
       </div>
       
-      <h3 style="margin-top: 1.5rem; font-size: 1rem; color: #fff;">Активные сделки:</h3>
-      <div id="activeTradesList" class="muted">Нет активных сделок</div>
+      <h3 style="margin-top: 1.5rem; font-size: 1rem; color: #fff; margin-bottom: 0.5rem;">Активные сделки:</h3>
+      <div id="activeTradesList" class="muted" style="text-align: left;">Нет активных сделок</div>
     </div>
     
     <div class="token-area">
       <input id="token" type="password" placeholder="Fine-grained PAT (Contents: Read and write)">
-      <button onclick="saveToken()" class="btn-on" style="padding: 0.5rem 1rem;">Сохранить токен</button>
+      <button onclick="saveToken()" class="btn-on">Сохранить токен</button>
     </div>
     <p class="muted" id="tokenStatus"></p>
     <p id="globalStatus" class="muted"></p>
@@ -84,7 +105,7 @@
 
   <!-- График TradingView -->
   <div class="card">
-    <h2 style="font-size: 1.1rem; margin-top: 0; margin-bottom: 1rem;">График BTC/USDT (4H)</h2>
+    <h2 style="font-size: 1.1rem; margin-top: 0; margin-bottom: 1rem; text-align: center;">BTC/USDT (4H)</h2>
     <div id="tv_chart_container"></div>
   </div>
 </div>
@@ -106,19 +127,16 @@ function initChart() {
     new TradingView.widget({
         "autosize": true,
         "symbol": "BINANCE:BTCUSDT",
-        "interval": "240", // 4 часа в минутах
+        "interval": "240",
         "timezone": "Etc/UTC",
         "theme": "dark",
         "style": "1",
         "locale": "ru",
-        "toolbar_bg": "#f1f3f6",
         "enable_publishing": false,
-        "hide_side_toolbar": false, // Включает панель инструментов (рисовалки)
+        "hide_side_toolbar": false,
         "allow_symbol_change": true,
         "container_id": "tv_chart_container",
-        "studies": [
-            "MASimple@tv-basicstudies"
-        ]
+        "studies": ["MASimple@tv-basicstudies"]
     });
 }
 
@@ -135,7 +153,7 @@ function saveToken() {
     localStorage.setItem(tokenKey, val);
     $('token').value = '';
     updateTokenStatus();
-    loadDashboard(); // Перезагружаем данные с новым токеном
+    loadDashboard();
 }
 
 async function getFile(path) {
@@ -173,30 +191,35 @@ async function loadDashboard() {
     }
 
     try {
-        // Загружаем конфиг (вкл/выкл)
         const { data: cfg } = await getFile(CONFIG_PATH);
         const enabled = cfg ? cfg.enabled : false;
         
         const badge = $('botStatusBadge');
         if (enabled) {
-            badge.textContent = 'Бот ВКЛЮЧЕН';
+            badge.textContent = 'ВКЛЮЧЕН';
             badge.className = 'status-badge status-active';
             $('btnEnable').classList.add('btn-disabled');
             $('btnDisable').classList.remove('btn-disabled');
         } else {
-            badge.textContent = 'Бот ВЫКЛЮЧЕН';
+            badge.textContent = 'ВЫКЛЮЧЕН';
             badge.className = 'status-badge status-inactive';
             $('btnEnable').classList.remove('btn-disabled');
             $('btnDisable').classList.add('btn-disabled');
         }
 
-        // Загружаем состояние (стратегию)
         const { data: state } = await getFile(STATE_PATH);
         if (state) {
             $('botInfo').style.display = 'block';
-            $('infoState').textContent = state.status || '-';
             
-            // Показываем уровень только если есть активный триггер
+            // Перевод статусов на русский для удобства
+            const statusMap = {
+                "WAITING_NEXT_TRIGGER": "Ждет триггер (16:00)",
+                "WAITING_BREAKOUT": "Ждет пробоя",
+                "WAITING_RETEST": "Ждет ретеста",
+                "IN_TRADE": "В сделке"
+            };
+            $('infoState').textContent = statusMap[state.status] || state.status || '-';
+            
             if (state.trigger_high) {
                 $('triggerInfo').style.display = 'block';
                 $('infoLevel').textContent = state.trigger_high;
@@ -204,11 +227,10 @@ async function loadDashboard() {
                 $('triggerInfo').style.display = 'none';
             }
 
-            // Выводим активные сделки
             const tradesDiv = $('activeTradesList');
             if (state.active_trades && state.active_trades.length > 0) {
                 tradesDiv.innerHTML = state.active_trades.map(t => `
-                    <div style="background: #131722; padding: 0.8rem; border-radius: 4px; margin-bottom: 0.5rem; border-left: 3px solid ${t.breakeven ? '#089981' : '#f7a600'};">
+                    <div class="trade-item ${t.breakeven ? 'breakeven' : ''}">
                         <strong>Сделка от ${t.date}</strong><br>
                         Вход: ${t.entry_price} | Стоп: ${t.stop_loss} ${t.breakeven ? '(Безубыток)' : ''}
                     </div>
@@ -218,15 +240,13 @@ async function loadDashboard() {
             }
             
             if (state.status.includes('WAITING')) {
-                $('botStatusBadge').className = 'status-badge status-waiting';
-            } else if (state.status === 'IN_TRADE') {
-                $('botStatusBadge').className = 'status-badge status-active';
+                badge.classList.add('status-waiting');
             }
         } else {
             $('botInfo').style.display = 'none';
         }
 
-        $('globalStatus').textContent = 'Данные обновлены: ' + new Date().toLocaleTimeString();
+        $('globalStatus').textContent = 'Обновлено: ' + new Date().toLocaleTimeString();
         $('globalStatus').className = 'ok';
 
     } catch (e) {
@@ -240,14 +260,14 @@ async function setBotState(enable) {
     
     const btn = enable ? $('btnEnable') : $('btnDisable');
     const originalText = btn.textContent;
-    btn.textContent = 'Сохранение...';
+    btn.textContent = '...';
     btn.disabled = true;
 
     try {
         const { sha } = await getFile(CONFIG_PATH);
         const newData = { enabled: enable };
-        await putFile(CONFIG_PATH, newData, sha, enable ? 'Bot enabled via dashboard' : 'Bot disabled via dashboard');
-        await loadDashboard(); // Перезагружаем UI
+        await putFile(CONFIG_PATH, newData, sha, enable ? 'Bot enabled' : 'Bot disabled');
+        await loadDashboard();
     } catch (e) {
         alert('Ошибка: ' + e.message);
     } finally {
