@@ -66,40 +66,31 @@
   
   .trade-item { background: #131722; padding: 0.8rem; border-radius: 4px; margin-bottom: 0.5rem; border-left: 3px solid #f7a600; font-size: 0.9rem; }
   .trade-item.breakeven { border-left-color: #089981; }
-
-  .onchain-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 0.8rem; margin-top: 1rem; }
-  @media (min-width: 600px) { .onchain-grid { grid-template-columns: repeat(4, 1fr); } }
 </style>
 </head>
 <body>
 
-<!-- ================= ON-CHAIN STATS (В САМОМ НАЧАЛЕ) ================= -->
+<!-- ================= ТАБЛИЦА ТРАНЗАКЦИЙ (В САМОМ НАЧАЛЕ) ================= -->
 <div class="container" style="margin-bottom: 1rem;">
   <div class="card">
     <h2 style="font-size: 1.1rem; margin-top: 0; margin-bottom: 1rem; text-align: center;">
-      ⛓️ BTC On-Chain (24ч)
+      📋 On-Chain: Транзакции ≥ 1 BTC
     </h2>
-    
-    <div class="onchain-grid">
-      <div class="info-item">
-        <div class="info-label">Транзакции ≥1 BTC</div>
-        <div class="info-value" id="statTotalTx">--</div>
-      </div>
-      <div class="info-item">
-        <div class="info-label">📥 На биржи</div>
-        <div class="info-value" id="statExchangeIn" style="color: #089981;">--</div>
-      </div>
-      <div class="info-item">
-        <div class="info-label">📤 С бирж</div>
-        <div class="info-value" id="statExchangeOut" style="color: #f23645;">--</div>
-      </div>
-      <div class="info-item">
-        <div class="info-label">🐋 Топ-200</div>
-        <div class="info-value" id="statTopWallets">--</div>
-      </div>
+    <div style="overflow-x: auto;">
+      <table id="txTable" style="width: 100%; border-collapse: collapse; font-size: 0.85rem;">
+        <thead>
+          <tr style="background: #2a2e39; text-align: left;">
+            <th style="padding: 8px; border: 1px solid #2a2e39;">Время (UTC)</th>
+            <th style="padding: 8px; border: 1px solid #2a2e39;">Сумма (BTC)</th>
+            <th style="padding: 8px; border: 1px solid #2a2e39;">Хэш</th>
+          </tr>
+        </thead>
+        <tbody id="txTableBody">
+          <tr><td colspan="3" style="text-align: center; padding: 1rem; color: #787b86;">Загрузка...</td></tr>
+        </tbody>
+      </table>
     </div>
-    
-    <p class="muted" id="onchainStatus" style="margin-top: 0.8rem;">Загрузка...</p>
+    <p class="muted" id="txStatus" style="margin-top: 0.8rem;">Загрузка транзакций...</p>
   </div>
 </div>
 
@@ -175,30 +166,51 @@ const SYMBOLS = [
 const $ = id => document.getElementById(id);
 const tokenKey = 'gh_pat_bot_dashboard';
 
-/* ---------- On-chain stats ---------- */
-async function loadOnChainStats() {
-  const statusEl = $('onchainStatus');
+/* ---------- Загрузка транзакций On-Chain ---------- */
+async function loadRecentTransactions() {
+  const tbody = $('txTableBody');
+  const statusEl = $('txStatus');
+  
   try {
-    const url = `https://raw.githubusercontent.com/${OWNER}/${REPO}/${BRANCH}/onchain_stats.json?t=${Date.now()}`;
+    // Фильтр: output_total >= 1 BTC (100,000,000 сатоши), сортировка по времени
+    const url = 'https://api.blockchair.com/bitcoin/transactions?q=output_total(100000000..)&s=time(desc)&limit=30';
+    
     const res = await fetch(url);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const stats = await res.json();
     
-    $('statTotalTx').textContent = (stats.total_tx_1btc || 0).toLocaleString();
-    $('statExchangeIn').textContent = (stats.exchange_in || 0).toLocaleString();
-    $('statExchangeOut').textContent = (stats.exchange_out || 0).toLocaleString();
-    $('statTopWallets').textContent = (stats.top_wallets_tx || 0).toLocaleString();
+    const json = await res.json();
+    const txs = json.data || [];
     
-    statusEl.textContent = 'Обновлено: ' + new Date(stats.updated_at).toLocaleString() + 
-                           ' | Период: ' + (stats.period_hours || 24) + 'ч';
+    if (txs.length === 0) {
+      tbody.innerHTML = '<tr><td colspan="3" style="text-align:center; padding:1rem; color:#787b86;">Нет транзакций ≥ 1 BTC</td></tr>';
+      statusEl.textContent = 'Транзакций не найдено.';
+      return;
+    }
+    
+    tbody.innerHTML = txs.map(tx => {
+      const time = new Date(tx.time * 1000).toLocaleString('ru-RU');
+      const btc = (tx.output_total / 100000000).toFixed(4);
+      const shortHash = tx.hash.slice(0, 12) + '...' + tx.hash.slice(-6);
+      return `
+        <tr>
+          <td style="padding: 8px; border: 1px solid #2a2e39;">${time}</td>
+          <td style="padding: 8px; border: 1px solid #2a2e39; color: #089981; font-weight: 600;">${btc}</td>
+          <td style="padding: 8px; border: 1px solid #2a2e39; font-family: monospace; font-size: 0.8rem;">${shortHash}</td>
+        </tr>
+      `;
+    }).join('');
+    
+    statusEl.textContent = `Показано ${txs.length} последних транзакций (Blockchair API)`;
     statusEl.className = 'muted';
+    
   } catch (e) {
-    statusEl.textContent = 'Данные on-chain ещё не готовы (запустите Actions)';
-    statusEl.className = 'muted';
+    tbody.innerHTML = `<tr><td colspan="3" style="text-align:center; padding:1rem; color:#f23645;">Ошибка: ${e.message}</td></tr>`;
+    statusEl.textContent = 'Не удалось загрузить транзакции.';
+    statusEl.className = 'err';
   }
 }
 
-/* ---------- Scroll to top ---------- */
+/* ---------- Кнопка "Наверх" ---------- */
 window.addEventListener('scroll', function() {
   const btn = document.getElementById('backToTop');
   btn.style.display = window.scrollY > 300 ? 'block' : 'none';
@@ -373,7 +385,7 @@ async function setBotState(enable) {
 }
 
 document.addEventListener('DOMContentLoaded', () => {
-    loadOnChainStats();
+    loadRecentTransactions(); // Загружаем транзакции
     initCharts();
     updateTokenStatus();
     if (getToken()) loadDashboard();
