@@ -166,48 +166,76 @@ const SYMBOLS = [
 const $ = id => document.getElementById(id);
 const tokenKey = 'gh_pat_bot_dashboard';
 
-/* ---------- Загрузка транзакций On-Chain ---------- */
+/* ---------- Загрузка транзакций On-Chain (с кэшем) ---------- */
 async function loadRecentTransactions() {
   const tbody = $('txTableBody');
   const statusEl = $('txStatus');
   
+  // Кэшируем данные на 5 минут, чтобы не ловить HTTP 430 от Blockchair
+  const cacheKey = 'btc_tx_cache';
+  const cacheTimeKey = 'btc_tx_cache_time';
+  const cachedData = localStorage.getItem(cacheKey);
+  const cachedTime = localStorage.getItem(cacheTimeKey);
+  
+  if (cachedData && cachedTime && (Date.now() - parseInt(cachedTime) < 300000)) {
+    renderTransactions(JSON.parse(cachedData), tbody, statusEl);
+    statusEl.textContent += ' (из кэша)';
+    return;
+  }
+  
   try {
-    // Фильтр: output_total >= 1 BTC (100,000,000 сатоши), сортировка по времени
-    const url = 'https://api.blockchair.com/bitcoin/transactions?q=output_total(100000000..)&s=time(desc)&limit=30';
+    statusEl.textContent = 'Загрузка данных с Blockchair...';
+    statusEl.className = 'muted';
     
+    // Запрашиваем 30 последних транзакций от 1 BTC
+    const url = 'https://api.blockchair.com/bitcoin/transactions?q=output_total(100000000..)&s=time(desc)&limit=30';
     const res = await fetch(url);
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    
+    if (!res.ok) {
+        if(res.status === 430) throw new Error('HTTP 430 (Лимит запросов Blockchair превышен. Подождите пару минут)');
+        throw new Error(`HTTP ${res.status}`);
+    }
     
     const json = await res.json();
     const txs = json.data || [];
     
-    if (txs.length === 0) {
-      tbody.innerHTML = '<tr><td colspan="3" style="text-align:center; padding:1rem; color:#787b86;">Нет транзакций ≥ 1 BTC</td></tr>';
-      statusEl.textContent = 'Транзакций не найдено.';
-      return;
-    }
+    // Сохраняем в кэш
+    localStorage.setItem(cacheKey, JSON.stringify(txs));
+    localStorage.setItem(cacheTimeKey, Date.now().toString());
     
-    tbody.innerHTML = txs.map(tx => {
-      const time = new Date(tx.time * 1000).toLocaleString('ru-RU');
-      const btc = (tx.output_total / 100000000).toFixed(4);
-      const shortHash = tx.hash.slice(0, 12) + '...' + tx.hash.slice(-6);
-      return `
-        <tr>
-          <td style="padding: 8px; border: 1px solid #2a2e39;">${time}</td>
-          <td style="padding: 8px; border: 1px solid #2a2e39; color: #089981; font-weight: 600;">${btc}</td>
-          <td style="padding: 8px; border: 1px solid #2a2e39; font-family: monospace; font-size: 0.8rem;">${shortHash}</td>
-        </tr>
-      `;
-    }).join('');
-    
-    statusEl.textContent = `Показано ${txs.length} последних транзакций (Blockchair API)`;
-    statusEl.className = 'muted';
+    renderTransactions(txs, tbody, statusEl);
     
   } catch (e) {
     tbody.innerHTML = `<tr><td colspan="3" style="text-align:center; padding:1rem; color:#f23645;">Ошибка: ${e.message}</td></tr>`;
     statusEl.textContent = 'Не удалось загрузить транзакции.';
     statusEl.className = 'err';
   }
+}
+
+// Вспомогательная функция для отрисовки
+function renderTransactions(txs, tbody, statusEl) {
+  if (!txs || txs.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="3" style="text-align:center; padding:1rem; color:#787b86;">Нет транзакций ≥ 1 BTC</td></tr>';
+    statusEl.textContent = 'Транзакций не найдено.';
+    statusEl.className = 'muted';
+    return;
+  }
+  
+  tbody.innerHTML = txs.map(tx => {
+    const time = new Date(tx.time * 1000).toLocaleString('ru-RU');
+    const btc = (tx.output_total / 100000000).toFixed(4);
+    const shortHash = tx.hash.slice(0, 12) + '...' + tx.hash.slice(-6);
+    return `
+      <tr>
+        <td style="padding: 8px; border: 1px solid #2a2e39;">${time}</td>
+        <td style="padding: 8px; border: 1px solid #2a2e39; color: #089981; font-weight: 600;">${btc}</td>
+        <td style="padding: 8px; border: 1px solid #2a2e39; font-family: monospace; font-size: 0.8rem;">${shortHash}</td>
+      </tr>
+    `;
+  }).join('');
+  
+  statusEl.textContent = `Показано ${txs.length} последних транзакций (Blockchair API)`;
+  statusEl.className = 'muted';
 }
 
 /* ---------- Кнопка "Наверх" ---------- */
@@ -385,7 +413,7 @@ async function setBotState(enable) {
 }
 
 document.addEventListener('DOMContentLoaded', () => {
-    loadRecentTransactions(); // Загружаем транзакции
+    loadRecentTransactions();
     initCharts();
     updateTokenStatus();
     if (getToken()) loadDashboard();
