@@ -50,21 +50,13 @@
   }
 
   .chart-container { 
-    height: 400px; 
-    width: 100%; 
-    border-radius: 8px; 
-    overflow: hidden; 
-    border: 1px solid #2a2e39; 
-    background: #131722;
+    height: 400px; width: 100%; border-radius: 8px; overflow: hidden; 
+    border: 1px solid #2a2e39; background: #131722;
   }
-  @media (min-width: 800px) {
-    .chart-container { height: 450px; }
-  }
+  @media (min-width: 800px) { .chart-container { height: 450px; } }
   
   .token-area { display: flex; flex-direction: column; gap: 0.5rem; margin-top: 1rem; }
-  @media (min-width: 600px) {
-    .token-area { flex-direction: row; }
-  }
+  @media (min-width: 600px) { .token-area { flex-direction: row; } }
   
   .token-area input { flex: 1; padding: 0.8rem; border-radius: 4px; border: 1px solid #2a2e39; background: #131722; color: #d1d4dc; font-size: 0.9rem; }
   
@@ -74,10 +66,44 @@
   
   .trade-item { background: #131722; padding: 0.8rem; border-radius: 4px; margin-bottom: 0.5rem; border-left: 3px solid #f7a600; font-size: 0.9rem; }
   .trade-item.breakeven { border-left-color: #089981; }
+
+  .onchain-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 0.8rem; margin-top: 1rem; }
+  @media (min-width: 600px) { .onchain-grid { grid-template-columns: repeat(4, 1fr); } }
 </style>
 </head>
 <body>
 
+<!-- ================= ON-CHAIN STATS (В САМОМ НАЧАЛЕ) ================= -->
+<div class="container" style="margin-bottom: 1rem;">
+  <div class="card">
+    <h2 style="font-size: 1.1rem; margin-top: 0; margin-bottom: 1rem; text-align: center;">
+      ⛓️ BTC On-Chain (24ч)
+    </h2>
+    
+    <div class="onchain-grid">
+      <div class="info-item">
+        <div class="info-label">Транзакции ≥1 BTC</div>
+        <div class="info-value" id="statTotalTx">--</div>
+      </div>
+      <div class="info-item">
+        <div class="info-label">📥 На биржи</div>
+        <div class="info-value" id="statExchangeIn" style="color: #089981;">--</div>
+      </div>
+      <div class="info-item">
+        <div class="info-label">📤 С бирж</div>
+        <div class="info-value" id="statExchangeOut" style="color: #f23645;">--</div>
+      </div>
+      <div class="info-item">
+        <div class="info-label">🐋 Топ-200</div>
+        <div class="info-value" id="statTopWallets">--</div>
+      </div>
+    </div>
+    
+    <p class="muted" id="onchainStatus" style="margin-top: 0.8rem;">Загрузка...</p>
+  </div>
+</div>
+
+<!-- ================= ОРИГИНАЛЬНЫЙ ДАШБОРД ================= -->
 <div class="container">
   <h1>Breakout Bot Dashboard</h1>
 
@@ -122,6 +148,15 @@
   </div>
 </div>
 
+<!-- ================= КНОПКА "НАВЕРХ" ================= -->
+<button id="backToTop" onclick="window.scrollTo({top: 0, behavior: 'smooth'})" 
+        style="position: fixed; bottom: 20px; right: 20px; width: 50px; height: 50px; 
+               border-radius: 50%; background: #089981; color: #fff; font-size: 1.5rem; 
+               border: none; cursor: pointer; display: none; z-index: 999;
+               box-shadow: 0 4px 12px rgba(0,0,0,0.3);">
+  ↑
+</button>
+
 <script type="text/javascript" src="https://s3.tradingview.com/tv.js"></script>
 <script>
 const OWNER  = 'youtumbashow-lab';
@@ -140,6 +175,36 @@ const SYMBOLS = [
 const $ = id => document.getElementById(id);
 const tokenKey = 'gh_pat_bot_dashboard';
 
+/* ---------- On-chain stats ---------- */
+async function loadOnChainStats() {
+  const statusEl = $('onchainStatus');
+  try {
+    const url = `https://raw.githubusercontent.com/${OWNER}/${REPO}/${BRANCH}/onchain_stats.json?t=${Date.now()}`;
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const stats = await res.json();
+    
+    $('statTotalTx').textContent = (stats.total_tx_1btc || 0).toLocaleString();
+    $('statExchangeIn').textContent = (stats.exchange_in || 0).toLocaleString();
+    $('statExchangeOut').textContent = (stats.exchange_out || 0).toLocaleString();
+    $('statTopWallets').textContent = (stats.top_wallets_tx || 0).toLocaleString();
+    
+    statusEl.textContent = 'Обновлено: ' + new Date(stats.updated_at).toLocaleString() + 
+                           ' | Период: ' + (stats.period_hours || 24) + 'ч';
+    statusEl.className = 'muted';
+  } catch (e) {
+    statusEl.textContent = 'Данные on-chain ещё не готовы (запустите Actions)';
+    statusEl.className = 'muted';
+  }
+}
+
+/* ---------- Scroll to top ---------- */
+window.addEventListener('scroll', function() {
+  const btn = document.getElementById('backToTop');
+  btn.style.display = window.scrollY > 300 ? 'block' : 'none';
+});
+
+/* ---------- Оригинальная логика дашборда ---------- */
 function initCharts() {
     const grid = $('chartsGrid');
     grid.innerHTML = '';
@@ -163,24 +228,8 @@ function initCharts() {
             "allow_symbol_change": false,
             "container_id": `tv_chart_${index}`,
             "studies": [
-                // ЖЕСТКАЯ КОНФИГУРАЦИЯ EMA 200
-                {
-                    id: "MAExp@tv-basicstudies",
-                    inputs: { 
-                        length: 200 
-                    }
-                },
-                // ЖЕСТКАЯ КОНФИГУРАЦИЯ MACD (12, 46, 9)
-                {
-                    id: "MACD@tv-basicstudies",
-                    inputs: { 
-                        fastLength: 12, 
-                        slowLength: 46, 
-                        signalLength: 9,
-                        oscillatorMaType: "EMA",
-                        signalMaType: "EMA"
-                    }
-                }
+                { id: "MAExp@tv-basicstudies", inputs: { length: 200 } },
+                { id: "MACD@tv-basicstudies", inputs: { fastLength: 12, slowLength: 46, signalLength: 9, oscillatorMaType: "EMA", signalMaType: "EMA" } }
             ]
         });
     });
@@ -324,6 +373,7 @@ async function setBotState(enable) {
 }
 
 document.addEventListener('DOMContentLoaded', () => {
+    loadOnChainStats();
     initCharts();
     updateTokenStatus();
     if (getToken()) loadDashboard();
