@@ -74,7 +74,7 @@
 <div class="container" style="margin-bottom: 1rem;">
   <div class="card">
     <h2 style="font-size: 1.1rem; margin-top: 0; margin-bottom: 1rem; text-align: center;">
-      📋 On-Chain: Транзакции ≥ 1 BTC
+      📋 On-Chain: Транзакции ≥ 1 BTC (за 3 дня)
     </h2>
     <div style="overflow-x: auto;">
       <table id="txTable" style="width: 100%; border-collapse: collapse; font-size: 0.85rem;">
@@ -90,6 +90,11 @@
         </tbody>
       </table>
     </div>
+    
+    <button id="loadMoreBtn" onclick="loadMoreTransactions()" class="btn-on" style="margin-top: 1rem; width: 100%; display: none;">
+      Показать ещё 100 транзакций
+    </button>
+    
     <p class="muted" id="txStatus" style="margin-top: 0.8rem;">Загрузка транзакций...</p>
   </div>
 </div>
@@ -166,29 +171,44 @@ const SYMBOLS = [
 const $ = id => document.getElementById(id);
 const tokenKey = 'gh_pat_bot_dashboard';
 
-/* ---------- Загрузка транзакций On-Chain (с кэшем) ---------- */
-async function loadRecentTransactions() {
+/* ---------- Загрузка транзакций On-Chain (за 3 дня с пагинацией) ---------- */
+let currentOffset = 0;
+const TX_LIMIT = 100; // Максимум для одного запроса Blockchair
+const DAYS_BACK = 3;
+let currentStartDate = '';
+
+async function loadRecentTransactions(reset = true) {
   const tbody = $('txTableBody');
   const statusEl = $('txStatus');
   
-  // Кэшируем данные на 5 минут, чтобы не ловить HTTP 430 от Blockchair
-  const cacheKey = 'btc_tx_cache';
-  const cacheTimeKey = 'btc_tx_cache_time';
+  if (reset) {
+    currentOffset = 0;
+    tbody.innerHTML = '<tr><td colspan="3" style="text-align:center; padding:1rem; color:#787b86;">Загрузка...</td></tr>';
+    // Вычисляем дату 3 дня назад в формате YYYY-MM-DD
+    const date = new Date();
+    date.setDate(date.getDate() - DAYS_BACK);
+    currentStartDate = date.toISOString().split('T')[0];
+  }
+
+  const cacheKey = `btc_tx_cache_${currentOffset}`;
+  const cacheTimeKey = `btc_tx_cache_time_${currentOffset}`;
   const cachedData = localStorage.getItem(cacheKey);
   const cachedTime = localStorage.getItem(cacheTimeKey);
   
+  // Кэш на 5 минут
   if (cachedData && cachedTime && (Date.now() - parseInt(cachedTime) < 300000)) {
-    renderTransactions(JSON.parse(cachedData), tbody, statusEl);
+    renderTransactions(JSON.parse(cachedData), tbody, statusEl, reset);
     statusEl.textContent += ' (из кэша)';
     return;
   }
   
   try {
-    statusEl.textContent = 'Загрузка данных с Blockchair...';
+    if (reset) statusEl.textContent = 'Загрузка данных с Blockchair...';
     statusEl.className = 'muted';
     
-    // Запрашиваем 30 последних транзакций от 1 BTC
-    const url = 'https://api.blockchair.com/bitcoin/transactions?q=output_total(100000000..)&s=time(desc)&limit=30';
+    // Добавляем фильтр по времени: time(YYYY-MM-DD..)
+    const url = `https://api.blockchair.com/bitcoin/transactions?q=output_total(100000000..),time(${currentStartDate}..)&s=time(desc)&limit=${TX_LIMIT}&offset=${currentOffset}`;
+    
     const res = await fetch(url);
     
     if (!res.ok) {
@@ -203,7 +223,7 @@ async function loadRecentTransactions() {
     localStorage.setItem(cacheKey, JSON.stringify(txs));
     localStorage.setItem(cacheTimeKey, Date.now().toString());
     
-    renderTransactions(txs, tbody, statusEl);
+    renderTransactions(txs, tbody, statusEl, reset);
     
   } catch (e) {
     tbody.innerHTML = `<tr><td colspan="3" style="text-align:center; padding:1rem; color:#f23645;">Ошибка: ${e.message}</td></tr>`;
@@ -213,15 +233,21 @@ async function loadRecentTransactions() {
 }
 
 // Вспомогательная функция для отрисовки
-function renderTransactions(txs, tbody, statusEl) {
+function renderTransactions(txs, tbody, statusEl, reset) {
+  if (reset) {
+    tbody.innerHTML = '';
+  }
+
   if (!txs || txs.length === 0) {
-    tbody.innerHTML = '<tr><td colspan="3" style="text-align:center; padding:1rem; color:#787b86;">Нет транзакций ≥ 1 BTC</td></tr>';
-    statusEl.textContent = 'Транзакций не найдено.';
+    if (reset) {
+      tbody.innerHTML = '<tr><td colspan="3" style="text-align:center; padding:1rem; color:#787b86;">Нет транзакций ≥ 1 BTC за выбранный период</td></tr>';
+    }
+    statusEl.textContent = 'Данных больше нет.';
     statusEl.className = 'muted';
     return;
   }
   
-  tbody.innerHTML = txs.map(tx => {
+  const rowsHtml = txs.map(tx => {
     const time = new Date(tx.time * 1000).toLocaleString('ru-RU');
     const btc = (tx.output_total / 100000000).toFixed(4);
     const shortHash = tx.hash.slice(0, 12) + '...' + tx.hash.slice(-6);
@@ -233,9 +259,27 @@ function renderTransactions(txs, tbody, statusEl) {
       </tr>
     `;
   }).join('');
+
+  tbody.insertAdjacentHTML('beforeend', rowsHtml);
   
-  statusEl.textContent = `Показано ${txs.length} последних транзакций (Blockchair API)`;
+  // Обновляем кнопку "Показать ещё"
+  const loadMoreBtn = $('loadMoreBtn');
+  if (loadMoreBtn) {
+    if (txs.length === TX_LIMIT) {
+      loadMoreBtn.style.display = 'block';
+    } else {
+      loadMoreBtn.style.display = 'none';
+    }
+  }
+
+  statusEl.textContent = `Показано ${tbody.children.length} транзакций за последние ${DAYS_BACK} дня (Blockchair API)`;
   statusEl.className = 'muted';
+}
+
+// Функция для кнопки "Показать ещё"
+function loadMoreTransactions() {
+  currentOffset += TX_LIMIT;
+  loadRecentTransactions(false);
 }
 
 /* ---------- Кнопка "Наверх" ---------- */
