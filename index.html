@@ -74,7 +74,7 @@
 <div class="container" style="margin-bottom: 1rem;">
   <div class="card">
     <h2 style="font-size: 1.1rem; margin-top: 0; margin-bottom: 1rem; text-align: center;">
-      📋 On-Chain: Транзакции ≥ 1 BTC (за 3 дня)
+      📋 On-Chain: Транзакции ≥ 1 BTC (Blockstream)
     </h2>
     <div style="overflow-x: auto;">
       <table id="txTable" style="width: 100%; border-collapse: collapse; font-size: 0.85rem;">
@@ -92,7 +92,7 @@
     </div>
     
     <button id="loadMoreBtn" onclick="loadMoreTransactions()" class="btn-on" style="margin-top: 1rem; width: 100%; display: none;">
-      Показать ещё 100 транзакций
+      Показать ещё (следующие блоки)
     </button>
     
     <p class="muted" id="txStatus" style="margin-top: 0.8rem;">Загрузка транзакций...</p>
@@ -171,60 +171,127 @@ const SYMBOLS = [
 const $ = id => document.getElementById(id);
 const tokenKey = 'gh_pat_bot_dashboard';
 
-/* ---------- Загрузка транзакций On-Chain (за 3 дня с пагинацией) ---------- */
-let currentOffset = 0;
-const TX_LIMIT = 100; // Максимум для одного запроса Blockchair
-const DAYS_BACK = 3;
-let currentStartDate = '';
+/* ---------- Загрузка транзакций On-Chain (Blockstream) ---------- */
+const BLOCKSTREAM_API = 'https://blockstream.info/api';
+let lastSeenBlockHeight = null; // Храним высоту последнего просмотренного блока
+const TX_LIMIT = 15; // Сколько блоков смотреть за один раз (чтобы не спамить)
+const MIN_SATOSHI = 100000000; // 1 BTC в сатоши
 
 async function loadRecentTransactions(reset = true) {
   const tbody = $('txTableBody');
   const statusEl = $('txStatus');
   
   if (reset) {
-    currentOffset = 0;
-    tbody.innerHTML = '<tr><td colspan="3" style="text-align:center; padding:1rem; color:#787b86;">Загрузка...</td></tr>';
-    // Вычисляем дату 3 дня назад в формате YYYY-MM-DD
-    const date = new Date();
-    date.setDate(date.getDate() - DAYS_BACK);
-    currentStartDate = date.toISOString().split('T')[0];
+    tbody.innerHTML = '<tr><td colspan="3" style="text-align:center; padding:1rem; color:#787b86;">Загрузка (анализ блоков)...</td></tr>';
+    statusEl.textContent = 'Получаем список последних блоков...';
+    statusEl.className = 'muted';
   }
 
-  const cacheKey = `btc_tx_cache_${currentOffset}`;
-  const cacheTimeKey = `btc_tx_cache_time_${currentOffset}`;
-  const cachedData = localStorage.getItem(cacheKey);
-  const cachedTime = localStorage.getItem(cacheTimeKey);
-  
-  // Кэш на 5 минут
-  if (cachedData && cachedTime && (Date.now() - parseInt(cachedTime) < 300000)) {
-    renderTransactions(JSON.parse(cachedData), tbody, statusEl, reset);
-    statusEl.textContent += ' (из кэша)';
-    return;
-  }
-  
   try {
-    if (reset) statusEl.textContent = 'Загрузка данных с Blockchair...';
+    // 1. Получаем высоту текущего блока
+    let tipHeight;
+    if (lastSeenBlockHeight === null) {
+      const tipRes = await fetch(`${BLOCKSTREAM_API}/blocks/tip/height`);
+      tipHeight = parseInt(await tipRes.text());
+    } else {
+      tipHeight = lastSeenBlockHeight;
+    }
+
+    // 2. Определяем диапазон блоков для загрузки
+    const startHeight = Math.max(0, tipHeight - TX_LIMIT + 1);
+    const heights = [];
+    for (let h = tipHeight; h >= startHeight; h--) {
+        heights.push(h);
+    }
+
+    if (heights.length === 0) {
+        statusEl.textContent = 'Достигнуто начало блокчейна.';
+        $('loadMoreBtn').style.display = 'none';
+        return;
+    }
+
+    statusEl.textContent = `Сканируем блоки с ${tipHeight} по ${startHeight}...`;
+    
+    let foundTxs = [];
+    let currentHeight = tipHeight;
+
+    // 3. Проходим по каждому блоку
+    for (const height of heights) {
+        // Получаем хэш блока по высоте
+        const hashRes = await fetch(`${BLOCKSTREAM_API}/block-height/${height}`);
+        if (!hashRes.ok) continue;
+        const blockHash = await hashRes.text();
+
+        // Получаем список транзакций в блоке (только txid)
+        const txIdsRes = await fetch(`${BLOCKSTREAM_API}/block/${blockHash}/txids`);
+        if (!txIdsRes.ok) continue;
+        const txIds = await txIdsRes.json();
+
+        // Берем первые 50 транзакций из блока (чтобы не зависнуть надолго)
+        // В реальном блоке их тысячи, но для демо-просмотра хватит
+        const sampleTxIds = txIds.slice(0, 50); 
+
+        // Для каждой транзакции запрашиваем детали (это долго, делаем с задержкой)
+        for (const txid of sampleTxIds) {
+            // Небольшая задержка, чтобы не забанили
+            await new Promise(r => setTimeout(r, 50)); 
+            
+            const txRes = await fetch(`${BLOCKSTREAM_API}/tx/${txid}`);
+            if (!txRes.ok) continue;
+            const txData = await txRes.json();
+
+            // Считаем общую сумму на выходах (vout)
+            let totalOut = 0;
+            if (txData.vout) {
+                txData.vout.forEach(out => {
+                    totalOut += out.value;
+                });
+            }
+
+            // Фильтр >= 1 BTC
+            if (totalOut >= MIN_SATOSHI) {
+                foundTxs.push({
+                    time: txData.status.block_time,
+                    value: totalOut,
+                    txid: txid
+                });
+            }
+        }
+        
+        // Если нашли достаточно транзакций, можем прерваться (опционально)
+        if (foundTxs.length >= 20) break; 
+    }
+
+    // Сохраняем высоту для следующей загрузки
+    lastSeenBlockHeight = startHeight - 1;
+
+    // 4. Отрисовка
+    if (reset) tbody.innerHTML = '';
+    
+    if (foundTxs.length === 0) {
+        if (reset) tbody.innerHTML = '<tr><td colspan="3" style="text-align:center; padding:1rem; color:#787b86;">В этих блоках не найдено транзакций ≥ 1 BTC</td></tr>';
+    } else {
+        const rowsHtml = foundTxs.map(tx => {
+            const time = new Date(tx.time * 1000).toLocaleString('ru-RU');
+            const btc = (tx.value / 100000000).toFixed(4);
+            const shortHash = tx.txid.slice(0, 12) + '...' + tx.txid.slice(-6);
+            return `
+              <tr>
+                <td style="padding: 8px; border: 1px solid #2a2e39;">${time}</td>
+                <td style="padding: 8px; border: 1px solid #2a2e39; color: #089981; font-weight: 600;">${btc}</td>
+                <td style="padding: 8px; border: 1px solid #2a2e39; font-family: monospace; font-size: 0.8rem;">${shortHash}</td>
+              </tr>
+            `;
+        }).join('');
+        tbody.insertAdjacentHTML('beforeend', rowsHtml);
+    }
+
+    statusEl.textContent = `Просканировано ${heights.length} блоков. Найдено транзакций: ${foundTxs.length}.`;
     statusEl.className = 'muted';
     
-    // Добавляем фильтр по времени: time(YYYY-MM-DD..)
-    const url = `https://api.blockchair.com/bitcoin/transactions?q=output_total(100000000..),time(${currentStartDate}..)&s=time(desc)&limit=${TX_LIMIT}&offset=${currentOffset}`;
-    
-    const res = await fetch(url);
-    
-    if (!res.ok) {
-        if(res.status === 430) throw new Error('HTTP 430 (Лимит запросов Blockchair превышен. Подождите пару минут)');
-        throw new Error(`HTTP ${res.status}`);
-    }
-    
-    const json = await res.json();
-    const txs = json.data || [];
-    
-    // Сохраняем в кэш
-    localStorage.setItem(cacheKey, JSON.stringify(txs));
-    localStorage.setItem(cacheTimeKey, Date.now().toString());
-    
-    renderTransactions(txs, tbody, statusEl, reset);
-    
+    // Показываем кнопку "Ещё", если мы не дошли до начала
+    $('loadMoreBtn').style.display = (lastSeenBlockHeight > 0) ? 'block' : 'none';
+
   } catch (e) {
     tbody.innerHTML = `<tr><td colspan="3" style="text-align:center; padding:1rem; color:#f23645;">Ошибка: ${e.message}</td></tr>`;
     statusEl.textContent = 'Не удалось загрузить транзакции.';
@@ -232,54 +299,9 @@ async function loadRecentTransactions(reset = true) {
   }
 }
 
-// Вспомогательная функция для отрисовки
-function renderTransactions(txs, tbody, statusEl, reset) {
-  if (reset) {
-    tbody.innerHTML = '';
-  }
-
-  if (!txs || txs.length === 0) {
-    if (reset) {
-      tbody.innerHTML = '<tr><td colspan="3" style="text-align:center; padding:1rem; color:#787b86;">Нет транзакций ≥ 1 BTC за выбранный период</td></tr>';
-    }
-    statusEl.textContent = 'Данных больше нет.';
-    statusEl.className = 'muted';
-    return;
-  }
-  
-  const rowsHtml = txs.map(tx => {
-    const time = new Date(tx.time * 1000).toLocaleString('ru-RU');
-    const btc = (tx.output_total / 100000000).toFixed(4);
-    const shortHash = tx.hash.slice(0, 12) + '...' + tx.hash.slice(-6);
-    return `
-      <tr>
-        <td style="padding: 8px; border: 1px solid #2a2e39;">${time}</td>
-        <td style="padding: 8px; border: 1px solid #2a2e39; color: #089981; font-weight: 600;">${btc}</td>
-        <td style="padding: 8px; border: 1px solid #2a2e39; font-family: monospace; font-size: 0.8rem;">${shortHash}</td>
-      </tr>
-    `;
-  }).join('');
-
-  tbody.insertAdjacentHTML('beforeend', rowsHtml);
-  
-  // Обновляем кнопку "Показать ещё"
-  const loadMoreBtn = $('loadMoreBtn');
-  if (loadMoreBtn) {
-    if (txs.length === TX_LIMIT) {
-      loadMoreBtn.style.display = 'block';
-    } else {
-      loadMoreBtn.style.display = 'none';
-    }
-  }
-
-  statusEl.textContent = `Показано ${tbody.children.length} транзакций за последние ${DAYS_BACK} дня (Blockchair API)`;
-  statusEl.className = 'muted';
-}
-
-// Функция для кнопки "Показать ещё"
 function loadMoreTransactions() {
-  currentOffset += TX_LIMIT;
-  loadRecentTransactions(false);
+    // Загружаем следующие блоки (кнопка)
+    loadRecentTransactions(false);
 }
 
 /* ---------- Кнопка "Наверх" ---------- */
