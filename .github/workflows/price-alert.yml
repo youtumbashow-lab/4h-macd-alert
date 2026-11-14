@@ -2,8 +2,8 @@ name: Breakout Bot
 
 on:
   schedule:
-    # Запуск каждый час в 1 минуту
-    - cron: '1 * * * *'
+    # Запуск каждые 15 минут
+    - cron: '*/15 * * * *'
   workflow_dispatch: {}
 
 permissions:
@@ -18,11 +18,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+
       - name: Установка зависимостей
         run: pip install --quiet requests
+
       - name: Запуск бота
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
@@ -31,6 +34,7 @@ jobs:
           EMAIL_USER: ${{ secrets.EMAIL_USER }}
           EMAIL_APP_PASSWORD: ${{ secrets.EMAIL_APP_PASSWORD }}
         run: python bot.py
+
       - name: Сохранить состояние
         if: always()
         run: |
