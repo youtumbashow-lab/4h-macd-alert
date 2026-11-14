@@ -70,6 +70,36 @@
 </head>
 <body>
 
+<!-- ================= ТАБЛИЦА ТРАНЗАКЦИЙ (В САМОМ НАЧАЛЕ) ================= -->
+<div class="container" style="margin-bottom: 1rem;">
+  <div class="card">
+    <h2 style="font-size: 1.1rem; margin-top: 0; margin-bottom: 1rem; text-align: center;">
+      📋 On-Chain: Транзакции ≥ 1 BTC (Blockstream)
+    </h2>
+    <div style="overflow-x: auto;">
+      <table id="txTable" style="width: 100%; border-collapse: collapse; font-size: 0.85rem;">
+        <thead>
+          <tr style="background: #2a2e39; text-align: left;">
+            <th style="padding: 8px; border: 1px solid #2a2e39;">Время (UTC)</th>
+            <th style="padding: 8px; border: 1px solid #2a2e39;">Сумма (BTC)</th>
+            <th style="padding: 8px; border: 1px solid #2a2e39;">Хэш</th>
+          </tr>
+        </thead>
+        <tbody id="txTableBody">
+          <tr><td colspan="3" style="text-align: center; padding: 1rem; color: #787b86;">Загрузка...</td></tr>
+        </tbody>
+      </table>
+    </div>
+    
+    <button id="loadMoreBtn" onclick="loadMoreTransactions()" class="btn-on" style="margin-top: 1rem; width: 100%; display: none;">
+      Показать ещё (следующие блоки)
+    </button>
+    
+    <p class="muted" id="txStatus" style="margin-top: 0.8rem;">Загрузка транзакций...</p>
+  </div>
+</div>
+
+<!-- ================= ОРИГИНАЛЬНЫЙ ДАШБОРД ================= -->
 <div class="container">
   <h1>Breakout Bot Dashboard</h1>
 
@@ -114,6 +144,15 @@
   </div>
 </div>
 
+<!-- ================= КНОПКА "НАВЕРХ" ================= -->
+<button id="backToTop" onclick="window.scrollTo({top: 0, behavior: 'smooth'})" 
+        style="position: fixed; bottom: 20px; right: 20px; width: 50px; height: 50px; 
+               border-radius: 50%; background: #089981; color: #fff; font-size: 1.5rem; 
+               border: none; cursor: pointer; display: none; z-index: 999;
+               box-shadow: 0 4px 12px rgba(0,0,0,0.3);">
+  ↑
+</button>
+
 <script type="text/javascript" src="https://s3.tradingview.com/tv.js"></script>
 <script>
 const OWNER  = 'youtumbashow-lab';
@@ -125,6 +164,129 @@ const STATE_PATH  = 'bot_state.json';
 const $ = id => document.getElementById(id);
 const tokenKey = 'gh_pat_bot_dashboard';
 
+/* ---------- Загрузка транзакций On-Chain (Blockstream) ---------- */
+const BLOCKSTREAM_API = 'https://blockstream.info/api';
+let lastSeenBlockHeight = null;
+const TX_LIMIT = 15;
+const MIN_SATOSHI = 100000000; // 1 BTC в сатоши
+
+async function loadRecentTransactions(reset = true) {
+  const tbody = $('txTableBody');
+  const statusEl = $('txStatus');
+  
+  if (reset) {
+    tbody.innerHTML = '<tr><td colspan="3" style="text-align:center; padding:1rem; color:#787b86;">Загрузка (анализ блоков)...</td></tr>';
+    statusEl.textContent = 'Получаем список последних блоков...';
+    statusEl.className = 'muted';
+  }
+
+  try {
+    let tipHeight;
+    if (lastSeenBlockHeight === null) {
+      const tipRes = await fetch(`${BLOCKSTREAM_API}/blocks/tip/height`);
+      tipHeight = parseInt(await tipRes.text());
+    } else {
+      tipHeight = lastSeenBlockHeight;
+    }
+
+    const startHeight = Math.max(0, tipHeight - TX_LIMIT + 1);
+    const heights = [];
+    for (let h = tipHeight; h >= startHeight; h--) {
+        heights.push(h);
+    }
+
+    if (heights.length === 0) {
+        statusEl.textContent = 'Достигнуто начало блокчейна.';
+        $('loadMoreBtn').style.display = 'none';
+        return;
+    }
+
+    statusEl.textContent = `Сканируем блоки с ${tipHeight} по ${startHeight}...`;
+    
+    let foundTxs = [];
+
+    for (const height of heights) {
+        const hashRes = await fetch(`${BLOCKSTREAM_API}/block-height/${height}`);
+        if (!hashRes.ok) continue;
+        const blockHash = await hashRes.text();
+
+        const txIdsRes = await fetch(`${BLOCKSTREAM_API}/block/${blockHash}/txids`);
+        if (!txIdsRes.ok) continue;
+        const txIds = await txIdsRes.json();
+
+        const sampleTxIds = txIds.slice(0, 50); 
+
+        for (const txid of sampleTxIds) {
+            await new Promise(r => setTimeout(r, 50)); 
+            
+            const txRes = await fetch(`${BLOCKSTREAM_API}/tx/${txid}`);
+            if (!txRes.ok) continue;
+            const txData = await txRes.json();
+
+            let totalOut = 0;
+            if (txData.vout) {
+                txData.vout.forEach(out => {
+                    totalOut += out.value;
+                });
+            }
+
+            if (totalOut >= MIN_SATOSHI) {
+                foundTxs.push({
+                    time: txData.status.block_time,
+                    value: totalOut,
+                    txid: txid
+                });
+            }
+        }
+        
+        if (foundTxs.length >= 20) break; 
+    }
+
+    lastSeenBlockHeight = startHeight - 1;
+
+    if (reset) tbody.innerHTML = '';
+    
+    if (foundTxs.length === 0) {
+        if (reset) tbody.innerHTML = '<tr><td colspan="3" style="text-align:center; padding:1rem; color:#787b86;">В этих блоках не найдено транзакций ≥ 1 BTC</td></tr>';
+    } else {
+        const rowsHtml = foundTxs.map(tx => {
+            const time = new Date(tx.time * 1000).toLocaleString('ru-RU');
+            const btc = (tx.value / 100000000).toFixed(4);
+            const shortHash = tx.txid.slice(0, 12) + '...' + tx.txid.slice(-6);
+            return `
+              <tr>
+                <td style="padding: 8px; border: 1px solid #2a2e39;">${time}</td>
+                <td style="padding: 8px; border: 1px solid #2a2e39; color: #089981; font-weight: 600;">${btc}</td>
+                <td style="padding: 8px; border: 1px solid #2a2e39; font-family: monospace; font-size: 0.8rem;">${shortHash}</td>
+              </tr>
+            `;
+        }).join('');
+        tbody.insertAdjacentHTML('beforeend', rowsHtml);
+    }
+
+    statusEl.textContent = `Просканировано ${heights.length} блоков. Найдено транзакций: ${foundTxs.length}.`;
+    statusEl.className = 'muted';
+    
+    $('loadMoreBtn').style.display = (lastSeenBlockHeight > 0) ? 'block' : 'none';
+
+  } catch (e) {
+    tbody.innerHTML = `<tr><td colspan="3" style="text-align:center; padding:1rem; color:#f23645;">Ошибка: ${e.message}</td></tr>`;
+    statusEl.textContent = 'Не удалось загрузить транзакции.';
+    statusEl.className = 'err';
+  }
+}
+
+function loadMoreTransactions() {
+    loadRecentTransactions(false);
+}
+
+/* ---------- Кнопка "Наверх" ---------- */
+window.addEventListener('scroll', function() {
+  const btn = document.getElementById('backToTop');
+  btn.style.display = window.scrollY > 300 ? 'block' : 'none';
+});
+
+/* ---------- Логика графика BTC ---------- */
 function initChart() {
     new TradingView.widget({
         "autosize": true,
@@ -139,17 +301,9 @@ function initChart() {
         "allow_symbol_change": false,
         "container_id": "tv_chart_container",
         "studies": [
-            "MAExp@tv-basicstudies", // EMA
-            "MACD@tv-basicstudies"   // MACD
-        ],
-        "studies_overrides": {
-            "moving average exponential.length": 200,
-            "MACD.fastLength": 12,
-            "MACD.slowLength": 46,
-            "MACD.signalLength": 9,
-            "MACD.oscillatorMaType": "EMA",
-            "MACD.signalMaType": "EMA"
-        }
+            { id: "MAExp@tv-basicstudies", inputs: { length: 200 } },
+            { id: "MACD@tv-basicstudies", inputs: { fastLength: 12, slowLength: 46, signalLength: 9, oscillatorMaType: "EMA", signalMaType: "EMA" } }
+        ]
     });
 }
 
@@ -291,6 +445,7 @@ async function setBotState(enable) {
 }
 
 document.addEventListener('DOMContentLoaded', () => {
+    loadRecentTransactions();
     initChart();
     updateTokenStatus();
     if (getToken()) loadDashboard();
