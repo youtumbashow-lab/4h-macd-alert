@@ -1,0 +1,26 @@
+name: On-Chain Scanner
+on:
+  schedule:
+    - cron: '0 * * * *' # Каждый час
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install requests
+      - run: python scanner.py
+      - name: Commit
+        run: |
+          git config user.name "GitHub Actions"
+          git config user.email "actions@github.com"
+          git add onchain_history.json
+          git commit -m "Update on-chain history" || exit 0
+          git push
