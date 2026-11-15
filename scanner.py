@@ -5,10 +5,10 @@ import time
 from datetime import datetime, timezone
 
 API_URL = "https://blockstream.info/api"
-HISTORY_FILE = "wallets_history.json"
-BALANCE_CACHE = "balance_cache.json"
+STATS_FILE = "stats.json"
+WALLETS_FILE = "wallets_history.json"
 
-# ВАШИ АДРЕСА
+# ВАШИ 31 АДРЕС
 WALLETS = [
     "bc1q03yqge67aelutnxad3vkuhed5swsmllhuzspylpj4v6u3pgzpffq8wv3vg",
     "39CnKMu9KWvFAabLJ5BYghVfSqHgC2VShe",
@@ -43,102 +43,77 @@ WALLETS = [
     "16vYYR5uHkdoRW7XbVzrwjyXvVwWokpEao"
 ]
 
-def load_json(filename, default):
-    if os.path.exists(filename):
-        with open(filename, 'r') as f:
-            return json.load(f)
-    return default
+CATEGORIES = [1, 5, 10, 20, 50, 100, 500, 1000]
 
-def save_json(filename, data):
-    with open(filename, 'w') as f:
-        json.dump(data, f)
-
-def get_balance(address):
-    try:
-        r = requests.get(f"{API_URL}/address/{address}")
-        if r.status_code == 200:
-            data = r.json()
-            funded = data.get('chain_stats', {}).get('funded_txo_sum', 0)
-            spent = data.get('chain_stats', {}).get('spent_txo_sum', 0)
-            return funded - spent
-        return 0
-    except:
-        return 0
-
-def get_transactions(address):
-    try:
-        # Получаем последние 10 транзакций (для экономии запросов)
-        r = requests.get(f"{API_URL}/address/{address}/txs")
-        if r.status_code == 200:
-            return r.json()
-        return []
-    except:
-        return []
-
-def main():
-    print("Начинаем сканирование кошельков...")
+def scan_network_stats():
+    print("Сканируем общую статистику сети...")
+    tip = int(requests.get(f"{API_URL}/blocks/tip/height").text)
+    start = tip - 144
     
-    history = load_json(HISTORY_FILE, [])
-    balance_cache = load_json(BALANCE_CACHE, {})
+    stats = {str(cat): 0 for cat in CATEGORIES}
+    
+    # Сканируем каждый 3-й блок для экономии времени
+    for height in range(tip, start, -3):
+        try:
+            block_hash = requests.get(f"{API_URL}/block-height/{height}").text
+            txids = requests.get(f"{API_URL}/block/{block_hash}/txids").json()
+            
+            for txid in txids[:100]: # Берем 100 транзакций из блока
+                tx = requests.get(f"{API_URL}/tx/{txid}").json()
+                val = sum(vout['value'] for vout in tx.get('vout', []))
+                btc = val / 100000000
+                for cat in CATEGORIES:
+                    if btc >= cat:
+                        stats[str(cat)] += 1
+        except Exception as e:
+            print(f"Ошибка в блоке {height}: {e}")
+
+    with open(STATS_FILE, "w") as f:
+        json.dump({"updated_at": datetime.now(timezone.utc).isoformat(), "stats": stats}, f)
+    print(f"Статистика сети сохранена: {stats}")
+
+def scan_wallets():
+    print("Сканируем ваши адреса...")
+    history = []
+    if os.path.exists(WALLETS_FILE):
+        with open(WALLETS_FILE, 'r') as f:
+            history = json.load(f)
+            
     seen_txids = {tx['txid'] for tx in history}
     
     for addr in WALLETS:
-        print(f"Проверка {addr[:10]}...")
-        
-        # 1. Получаем текущий баланс
-        current_balance = get_balance(addr)
-        
-        # Проверка на пополнение "пустого" адреса (> 1000 BTC)
-        # Считаем адрес пустым, если в кэше баланс был 0
-        prev_balance = balance_cache.get(addr, 0)
-        
-        # 2. Получаем транзакции
-        txs = get_transactions(addr)
-        
-        for tx in txs:
-            txid = tx['txid']
-            if txid in seen_txids:
-                continue
+        try:
+            txs = requests.get(f"{API_URL}/address/{addr}/txs").json()
+            for tx in txs:
+                txid = tx['txid']
+                if txid in seen_txids:
+                    continue
+                    
+                received = sum(vout['value'] for vout in tx.get('vout', []) if vout.get('scriptpubkey_address') == addr)
+                sent = sum(vin.get('prevout', {}).get('value', 0) for vin in tx.get('vin', []) if vin.get('prevout', {}).get('scriptpubkey_address') == addr)
                 
-            # Считаем сумму ВХОДЯЩИХ на наш адрес
-            received = 0
-            for vout in tx.get('vout', []):
-                if vout.get('scriptpubkey_address') == addr:
-                    received += vout.get('value', 0)
-            
-            # Считаем сумму ИСХОДЯЩИХ с нашего адреса
-            sent = 0
-            for vin in tx.get('vin', []):
-                prevout = vin.get('prevout', {})
-                if prevout.get('scriptpubkey_address') == addr:
-                    sent += prevout.get('value', 0)
+                total = received if received > 0 else sent
+                direction = "IN" if received > 0 else "OUT"
+                
+                if total > 0:
+                    history.append({
+                        'txid': txid,
+                        'time_str': datetime.fromtimestamp(tx['status'].get('block_time', 0), timezone.utc).strftime('%Y-%m-%d %H:%M:%S'),
+                        'address': addr,
+                        'value': total,
+                        'direction': direction
+                    })
+                    seen_txids.add(txid)
+            time.sleep(0.5) # Пауза, чтобы Blockstream не забанил
+        except Exception as e:
+            print(f"Ошибка при проверке {addr[:10]}: {e}")
 
-            total = received if received > 0 else sent
-            direction = "IN" if received > 0 else "OUT"
-            
-            if total > 0:
-                history.append({
-                    'txid': txid,
-                    'timestamp': tx['status'].get('block_time', 0),
-                    'time_str': datetime.fromtimestamp(tx['status'].get('block_time', 0), timezone.utc).strftime('%Y-%m-%d %H:%M:%S'),
-                    'address': addr,
-                    'value': total,
-                    'direction': direction,
-                    'balance_before': prev_balance, # Для проверки условия
-                    'alert_1000': (prev_balance == 0 and direction == "IN" and total >= 100000000000) # > 1000 BTC в сатоши
-                })
-                seen_txids.add(txid)
-        
-        balance_cache[addr] = current_balance
-        time.sleep(1) # Пауза, чтобы не превысить лимит Blockstream
-    
-    # Сортируем историю (новые сверху) и обрезаем до 500 записей
-    history.sort(key=lambda x: x['timestamp'], reverse=True)
-    history = history[:500]
-    
-    save_json(HISTORY_FILE, history)
-    save_json(BALANCE_CACHE, balance_cache)
-    print(f"Готово. Всего транзакций в истории: {len(history)}")
+    # Сортируем (новые сверху) и обрезаем
+    history.sort(key=lambda x: x['time_str'], reverse=True)
+    with open(WALLETS_FILE, 'w') as f:
+        json.dump(history[:500], f)
+    print("История кошельков сохранена.")
 
 if __name__ == "__main__":
-    main()
+    scan_network_stats()
+    scan_wallets()
