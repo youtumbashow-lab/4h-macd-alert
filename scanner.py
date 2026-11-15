@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 
 API_URL = "https://blockstream.info/api"
 STATS_FILE = "stats.json"
+HISTORY_FILE = "history.json"
 WALLETS_FILE = "wallets_history.json"
 
 # ВАШИ 31 АДРЕС
@@ -52,13 +53,12 @@ def scan_network_stats():
     
     stats = {str(cat): 0 for cat in CATEGORIES}
     
-    # Сканируем каждый 3-й блок для экономии времени
     for height in range(tip, start, -3):
         try:
             block_hash = requests.get(f"{API_URL}/block-height/{height}").text
             txids = requests.get(f"{API_URL}/block/{block_hash}/txids").json()
             
-            for txid in txids[:100]: # Берем 100 транзакций из блока
+            for txid in txids[:100]:
                 tx = requests.get(f"{API_URL}/tx/{txid}").json()
                 val = sum(vout['value'] for vout in tx.get('vout', []))
                 btc = val / 100000000
@@ -68,9 +68,35 @@ def scan_network_stats():
         except Exception as e:
             print(f"Ошибка в блоке {height}: {e}")
 
+    today_str = datetime.now(timezone.utc).strftime('%Y-%m-%d')
+    updated_at = datetime.now(timezone.utc).isoformat()
+
+    # 1. Сохраняем текущую статистику (для плиток сверху)
     with open(STATS_FILE, "w") as f:
-        json.dump({"updated_at": datetime.now(timezone.utc).isoformat(), "stats": stats}, f)
-    print(f"Статистика сети сохранена: {stats}")
+        json.dump({"updated_at": updated_at, "stats": stats}, f)
+
+    # 2. Сохраняем в историю (для таблицы)
+    history = []
+    if os.path.exists(HISTORY_FILE):
+        with open(HISTORY_FILE, 'r') as f:
+            history = json.load(f)
+
+    # Проверяем, есть ли уже запись за сегодня. Если есть — обновляем.
+    # Если нет — добавляем новую.
+    history = [h for h in history if h['date'] != today_str]
+    history.append({
+        "date": today_str,
+        "stats": stats
+    })
+    
+    # Сортируем по дате (новые сверху) и обрезаем до 30 дней
+    history.sort(key=lambda x: x['date'], reverse=True)
+    history = history[:30]
+    
+    with open(HISTORY_FILE, 'w') as f:
+        json.dump(history, f)
+    
+    print(f"Статистика сохранена. Дней в истории: {len(history)}")
 
 def scan_wallets():
     print("Сканируем ваши адреса...")
@@ -104,15 +130,13 @@ def scan_wallets():
                         'direction': direction
                     })
                     seen_txids.add(txid)
-            time.sleep(0.5) # Пауза, чтобы Blockstream не забанил
+            time.sleep(0.5)
         except Exception as e:
             print(f"Ошибка при проверке {addr[:10]}: {e}")
 
-    # Сортируем (новые сверху) и обрезаем
     history.sort(key=lambda x: x['time_str'], reverse=True)
     with open(WALLETS_FILE, 'w') as f:
         json.dump(history[:500], f)
-    print("История кошельков сохранена.")
 
 if __name__ == "__main__":
     scan_network_stats()
