@@ -77,12 +77,12 @@ def scan_network_stats():
         return
         
     tip = int(tip_str)
-    start = tip - 144
+    start = tip - 6
     
     stats = {str(cat): 0 for cat in CATEGORIES}
     
     # Сканируем каждый 3-й блок
-    for height in range(tip, start, -3):
+    for height in range(tip, start, -1):
         try:
             block_hash = safe_get_text(f"{API_URL}/block-height/{height}")
             if not block_hash:
