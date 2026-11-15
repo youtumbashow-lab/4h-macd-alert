@@ -109,8 +109,8 @@
   </div>
 </div>
 
-<!-- ================= ВАШИ КОШЕЛЬКИ ================= -->
-<div class="container" style="margin-bottom: 1rem;">
+<!-- ================= ВАШИ КОШЕЛЬКИ (СКРЫТА ПО УМОЛЧАНИЮ) ================= -->
+<div class="container" id="walletsCardContainer" style="margin-bottom: 1rem; display: none;">
   <div class="card">
     <h2 style="font-size: 1.1rem; margin-top: 0; margin-bottom: 1rem; text-align: center;">
       👁️ Транзакции по вашим кошелькам
@@ -125,9 +125,7 @@
             <th style="padding: 8px; border: 1px solid #2a2e39;">Направление</th>
           </tr>
         </thead>
-        <tbody id="txTableBody">
-          <tr><td colspan="4" style="text-align: center; padding: 1rem; color: #787b86;">Загрузка...</td></tr>
-        </tbody>
+        <tbody id="txTableBody"></tbody>
       </table>
     </div>
     <p class="muted" id="txStatus" style="margin-top: 0.8rem;"></p>
@@ -271,7 +269,6 @@ function renderHistory() {
     return;
   }
   
-  // Показываем 10 дней, или все, если нажата кнопка "Ещё"
   const limit = historyExpanded ? allHistory.length : 10;
   const toShow = allHistory.slice(0, limit);
   
@@ -288,7 +285,6 @@ function renderHistory() {
     `;
   }).join('');
   
-  // Показываем кнопку "Ещё", если есть скрытые дни
   if (allHistory.length > 10 && !historyExpanded) {
     btn.style.display = 'block';
   } else {
@@ -303,6 +299,7 @@ function showMoreHistory() {
 
 /* ---------- Загрузка по кошелькам ---------- */
 async function loadWallets() {
+  const container = $('walletsCardContainer');
   const tbody = $('txTableBody');
   const statusEl = $('txStatus');
   
@@ -312,11 +309,12 @@ async function loadWallets() {
     if (!res.ok) throw new Error('Файл еще не создан');
     const txs = await res.json();
     
-    if (txs.length === 0) {
-      tbody.innerHTML = '<tr><td colspan="4" style="text-align:center; padding:1rem; color:#787b86;">Нет транзакций</td></tr>';
-      return;
+    // Если данных нет, оставляем контейнер скрытым и выходим
+    if (!txs || txs.length === 0) {
+      return; 
     }
     
+    // Если данные есть, отрисовываем их и показываем блок
     tbody.innerHTML = txs.map(tx => {
       const btc = (tx.value / 100000000).toFixed(4);
       const shortAddr = tx.address.slice(0, 8) + '...' + tx.address.slice(-6);
@@ -331,9 +329,13 @@ async function loadWallets() {
     }).join('');
     
     statusEl.textContent = `Показано ${txs.length} транзакций.`;
+    
+    // Показываем блок
+    container.style.display = 'block';
+    
   } catch (e) {
-    tbody.innerHTML = `<tr><td colspan="4" style="text-align:center; padding:1rem; color:#f23645;">Ожидание данных...</td></tr>`;
-    statusEl.textContent = '';
+    // При ошибке (файла нет) блок также остается скрытым
+    console.log('Нет данных по кошелькам:', e.message);
   }
 }
 
