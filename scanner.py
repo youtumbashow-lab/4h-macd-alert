@@ -46,21 +46,58 @@ WALLETS = [
 
 CATEGORIES = [1, 5, 10, 20, 50, 100, 500, 1000]
 
+def safe_get_json(url):
+    """Безопасный запрос к API с проверкой формата."""
+    try:
+        r = requests.get(url, timeout=10)
+        if r.status_code == 200:
+            data = r.json()
+            if isinstance(data, (dict, list)):
+                return data
+        return None
+    except:
+        return None
+
+def safe_get_text(url):
+    """Безопасный запрос текста (для хэша блока)."""
+    try:
+        r = requests.get(url, timeout=10)
+        if r.status_code == 200:
+            return r.text
+        return None
+    except:
+        return None
+
 def scan_network_stats():
     print("Сканируем общую статистику сети...")
-    tip = int(requests.get(f"{API_URL}/blocks/tip/height").text)
+    
+    tip_str = safe_get_text(f"{API_URL}/blocks/tip/height")
+    if not tip_str:
+        print("Не удалось получить высоту блока. Пропускаем.")
+        return
+        
+    tip = int(tip_str)
     start = tip - 144
     
     stats = {str(cat): 0 for cat in CATEGORIES}
     
+    # Сканируем каждый 3-й блок
     for height in range(tip, start, -3):
         try:
-            block_hash = requests.get(f"{API_URL}/block-height/{height}").text
-            txids = requests.get(f"{API_URL}/block/{block_hash}/txids").json()
-            
+            block_hash = safe_get_text(f"{API_URL}/block-height/{height}")
+            if not block_hash:
+                continue
+                
+            txids = safe_get_json(f"{API_URL}/block/{block_hash}/txids")
+            if not isinstance(txids, list):
+                continue
+                
             for txid in txids[:100]:
-                tx = requests.get(f"{API_URL}/tx/{txid}").json()
-                val = sum(vout['value'] for vout in tx.get('vout', []))
+                tx = safe_get_json(f"{API_URL}/tx/{txid}")
+                if not isinstance(tx, dict) or 'vout' not in tx:
+                    continue
+                    
+                val = sum(vout.get('value', 0) for vout in tx.get('vout', []))
                 btc = val / 100000000
                 for cat in CATEGORIES:
                     if btc >= cat:
@@ -75,21 +112,18 @@ def scan_network_stats():
     with open(STATS_FILE, "w") as f:
         json.dump({"updated_at": updated_at, "stats": stats}, f)
 
-    # 2. Сохраняем в историю (для таблицы)
+    # 2. Сохраняем в историю
     history = []
     if os.path.exists(HISTORY_FILE):
         with open(HISTORY_FILE, 'r') as f:
             history = json.load(f)
 
-    # Проверяем, есть ли уже запись за сегодня. Если есть — обновляем.
-    # Если нет — добавляем новую.
     history = [h for h in history if h['date'] != today_str]
     history.append({
         "date": today_str,
         "stats": stats
     })
     
-    # Сортируем по дате (новые сверху) и обрезаем до 30 дней
     history.sort(key=lambda x: x['date'], reverse=True)
     history = history[:30]
     
@@ -109,13 +143,21 @@ def scan_wallets():
     
     for addr in WALLETS:
         try:
-            txs = requests.get(f"{API_URL}/address/{addr}/txs").json()
+            txs = safe_get_json(f"{API_URL}/address/{addr}/txs")
+            if not isinstance(txs, list):
+                print(f"Ошибка при проверке {addr[:10]}: API вернул не список")
+                continue
+                
             for tx in txs:
-                txid = tx['txid']
-                if txid in seen_txids:
+                # Проверка, что это словарь
+                if not isinstance(tx, dict):
                     continue
                     
-                received = sum(vout['value'] for vout in tx.get('vout', []) if vout.get('scriptpubkey_address') == addr)
+                txid = tx.get('txid')
+                if not txid or txid in seen_txids:
+                    continue
+                    
+                received = sum(vout.get('value', 0) for vout in tx.get('vout', []) if vout.get('scriptpubkey_address') == addr)
                 sent = sum(vin.get('prevout', {}).get('value', 0) for vin in tx.get('vin', []) if vin.get('prevout', {}).get('scriptpubkey_address') == addr)
                 
                 total = received if received > 0 else sent
@@ -124,7 +166,7 @@ def scan_wallets():
                 if total > 0:
                     history.append({
                         'txid': txid,
-                        'time_str': datetime.fromtimestamp(tx['status'].get('block_time', 0), timezone.utc).strftime('%Y-%m-%d %H:%M:%S'),
+                        'time_str': datetime.fromtimestamp(tx.get('status', {}).get('block_time', 0), timezone.utc).strftime('%Y-%m-%d %H:%M:%S'),
                         'address': addr,
                         'value': total,
                         'direction': direction
@@ -137,6 +179,7 @@ def scan_wallets():
     history.sort(key=lambda x: x['time_str'], reverse=True)
     with open(WALLETS_FILE, 'w') as f:
         json.dump(history[:500], f)
+    print("Сканирование адресов завершено.")
 
 if __name__ == "__main__":
     scan_network_stats()
