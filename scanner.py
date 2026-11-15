@@ -47,7 +47,6 @@ WALLETS = [
 CATEGORIES = [1, 5, 10, 20, 50, 100, 500, 1000]
 
 def safe_get_json(url):
-    """Безопасный запрос к API с проверкой формата."""
     try:
         r = requests.get(url, timeout=10)
         if r.status_code == 200:
@@ -59,7 +58,6 @@ def safe_get_json(url):
         return None
 
 def safe_get_text(url):
-    """Безопасный запрос текста (для хэша блока)."""
     try:
         r = requests.get(url, timeout=10)
         if r.status_code == 200:
@@ -77,12 +75,12 @@ def scan_network_stats():
         return
         
     tip = int(tip_str)
-    start = tip - 6
+    start = tip - 144  # 24 часа (144 блока)
     
     stats = {str(cat): 0 for cat in CATEGORIES}
     
-    # Сканируем каждый 3-й блок
-    for height in range(tip, start, -1):
+    # Сканируем каждый 3-й блок для экономии времени
+    for height in range(tip, start, -3):
         try:
             block_hash = safe_get_text(f"{API_URL}/block-height/{height}")
             if not block_hash:
@@ -92,7 +90,7 @@ def scan_network_stats():
             if not isinstance(txids, list):
                 continue
                 
-            for txid in txids[:100]:
+            for txid in txids[:100]: # Берем первые 100 транзакций из блока
                 tx = safe_get_json(f"{API_URL}/tx/{txid}")
                 if not isinstance(tx, dict) or 'vout' not in tx:
                     continue
@@ -108,53 +106,51 @@ def scan_network_stats():
     today_str = datetime.now(timezone.utc).strftime('%Y-%m-%d')
     updated_at = datetime.now(timezone.utc).isoformat()
 
-    # 1. Сохраняем текущую статистику (для плиток сверху)
     with open(STATS_FILE, "w") as f:
         json.dump({"updated_at": updated_at, "stats": stats}, f)
 
-    # 2. Сохраняем в историю
     history = []
     if os.path.exists(HISTORY_FILE):
         with open(HISTORY_FILE, 'r') as f:
             history = json.load(f)
 
     history = [h for h in history if h['date'] != today_str]
-    history.append({
-        "date": today_str,
-        "stats": stats
-    })
-    
+    history.append({"date": today_str, "stats": stats})
     history.sort(key=lambda x: x['date'], reverse=True)
-    history = history[:30]
     
     with open(HISTORY_FILE, 'w') as f:
-        json.dump(history, f)
+        json.dump(history[:30], f)
     
     print(f"Статистика сохранена. Дней в истории: {len(history)}")
 
 def scan_wallets():
-    print("Сканируем ваши адреса...")
+    print("Сканируем ваши адреса (за последние 24 часа)...")
     history = []
     if os.path.exists(WALLETS_FILE):
         with open(WALLETS_FILE, 'r') as f:
             history = json.load(f)
             
     seen_txids = {tx['txid'] for tx in history}
+    now_ts = datetime.now(timezone.utc).timestamp()
     
     for addr in WALLETS:
         try:
             txs = safe_get_json(f"{API_URL}/address/{addr}/txs")
             if not isinstance(txs, list):
-                print(f"Ошибка при проверке {addr[:10]}: API вернул не список")
                 continue
                 
             for tx in txs:
-                # Проверка, что это словарь
                 if not isinstance(tx, dict):
                     continue
                     
                 txid = tx.get('txid')
                 if not txid or txid in seen_txids:
+                    continue
+                
+                block_time = tx.get('status', {}).get('block_time', 0)
+                
+                # Фильтр 24 часа (86400 секунд)
+                if not block_time or (now_ts - block_time > 86400):
                     continue
                     
                 received = sum(vout.get('value', 0) for vout in tx.get('vout', []) if vout.get('scriptpubkey_address') == addr)
@@ -166,7 +162,7 @@ def scan_wallets():
                 if total > 0:
                     history.append({
                         'txid': txid,
-                        'time_str': datetime.fromtimestamp(tx.get('status', {}).get('block_time', 0), timezone.utc).strftime('%Y-%m-%d %H:%M:%S'),
+                        'time_str': datetime.fromtimestamp(block_time, timezone.utc).strftime('%Y-%m-%d %H:%M:%S'),
                         'address': addr,
                         'value': total,
                         'direction': direction
@@ -176,7 +172,10 @@ def scan_wallets():
         except Exception as e:
             print(f"Ошибка при проверке {addr[:10]}: {e}")
 
+    # Очищаем старые записи
+    history = [tx for tx in history if (now_ts - datetime.strptime(tx['time_str'], '%Y-%m-%d %H:%M:%S').replace(tzinfo=timezone.utc).timestamp()) <= 86400]
     history.sort(key=lambda x: x['time_str'], reverse=True)
+    
     with open(WALLETS_FILE, 'w') as f:
         json.dump(history[:500], f)
     print("Сканирование адресов завершено.")
