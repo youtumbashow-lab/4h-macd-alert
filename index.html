@@ -21,9 +21,6 @@
   .btn-off:active { background: #c42b38; }
   .btn-disabled { opacity: 0.4; pointer-events: none; }
   
-  .filter-btn { background: #2a2e39; color: #d1d4dc; padding: 0.5rem 0.8rem; font-size: 0.8rem; margin: 0.2rem; }
-  .filter-btn.active { background: #089981; color: #fff; }
-  
   @media (max-width: 600px) {
     .btn-group { display: flex; flex-direction: column; gap: 0.5rem; width: 100%; margin-top: 1rem; }
     button { width: 100%; padding: 0.9rem; font-size: 1rem; }
@@ -36,9 +33,7 @@
   .status-waiting { background: #f7a60033; color: #f7a600; border: 1px solid #f7a600; }
   
   .info-grid { display: grid; grid-template-columns: 1fr; gap: 0.8rem; margin-top: 1rem; }
-  @media (min-width: 600px) {
-    .info-grid { grid-template-columns: 1fr 1fr; }
-  }
+  @media (min-width: 600px) { .info-grid { grid-template-columns: 1fr 1fr; } }
   
   .info-item { background: #131722; padding: 0.8rem; border-radius: 4px; border: 1px solid #2a2e39; }
   .info-label { font-size: 0.75rem; color: #787b86; margin-bottom: 0.3rem; text-transform: uppercase; letter-spacing: 0.5px; }
@@ -61,30 +56,37 @@
   
   .trade-item { background: #131722; padding: 0.8rem; border-radius: 4px; margin-bottom: 0.5rem; border-left: 3px solid #f7a600; font-size: 0.9rem; }
   .trade-item.breakeven { border-left-color: #089981; }
+
+  /* Стили для плиток статистики */
+  .stats-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 0.8rem; margin-top: 1rem; }
+  @media (min-width: 600px) { .stats-grid { grid-template-columns: repeat(4, 1fr); } }
+  
+  .stat-box { background: #131722; border: 1px solid #2a2e39; border-radius: 8px; padding: 1rem; text-align: center; }
+  .stat-title { font-size: 0.85rem; color: #787b86; margin-bottom: 0.5rem; }
+  .stat-num { font-size: 1.5rem; font-weight: 700; color: #089981; }
 </style>
 </head>
 <body>
 
-<!-- ================= ТАБЛИЦА ТРАНЗАКЦИЙ ================= -->
+<!-- ================= СТАТИСТИКА СЕТИ ================= -->
 <div class="container" style="margin-bottom: 1rem;">
   <div class="card">
     <h2 style="font-size: 1.1rem; margin-top: 0; margin-bottom: 1rem; text-align: center;">
-      📋 On-Chain: Транзакции по вашим кошелькам
+      📊 Общая статистика сети BTC (24ч)
     </h2>
-    
-    <!-- Фильтры -->
-    <div style="margin-bottom: 1rem; text-align: center;">
-      <button class="filter-btn active" onclick="filterTxs(0, this)">Все</button>
-      <button class="filter-btn" onclick="filterTxs(1, this)">>1 BTC</button>
-      <button class="filter-btn" onclick="filterTxs(5, this)">>5 BTC</button>
-      <button class="filter-btn" onclick="filterTxs(10, this)">>10 BTC</button>
-      <button class="filter-btn" onclick="filterTxs(20, this)">>20 BTC</button>
-      <button class="filter-btn" onclick="filterTxs(50, this)">>50 BTC</button>
-      <button class="filter-btn" onclick="filterTxs(100, this)">>100 BTC</button>
-      <button class="filter-btn" onclick="filterTxs(500, this)">>500 BTC</button>
-      <button class="filter-btn" onclick="filterTxs(1000, this)">>1000 BTC</button>
+    <div class="stats-grid" id="statsGrid">
+      <div style="grid-column: 1 / -1; text-align: center; color: #787b86; padding: 1rem;">Загрузка...</div>
     </div>
+    <p class="muted" id="statsStatus" style="margin-top: 1rem;"></p>
+  </div>
+</div>
 
+<!-- ================= ВАШИ КОШЕЛЬКИ ================= -->
+<div class="container" style="margin-bottom: 1rem;">
+  <div class="card">
+    <h2 style="font-size: 1.1rem; margin-top: 0; margin-bottom: 1rem; text-align: center;">
+      👁️ Транзакции по вашим кошелькам
+    </h2>
     <div style="overflow-x: auto;">
       <table id="txTable" style="width: 100%; border-collapse: collapse; font-size: 0.85rem;">
         <thead>
@@ -100,12 +102,11 @@
         </tbody>
       </table>
     </div>
-    
-    <p class="muted" id="txStatus" style="margin-top: 0.8rem;">Загрузка истории...</p>
+    <p class="muted" id="txStatus" style="margin-top: 0.8rem;"></p>
   </div>
 </div>
 
-<!-- ================= ОРИГИНАЛЬНЫЙ ДАШБОРД ================= -->
+<!-- ================= ДАШБОРД БОТА ================= -->
 <div class="container">
   <h1>Breakout Bot Dashboard</h1>
 
@@ -170,81 +171,79 @@ const STATE_PATH  = 'bot_state.json';
 const $ = id => document.getElementById(id);
 const tokenKey = 'gh_pat_bot_dashboard';
 
-let allTxs = []; // Храним все загруженные транзакции
-let currentFilter = 0; // 0 = все
+/* ---------- Загрузка статистики сети ---------- */
+async function loadStats() {
+  const grid = $('statsGrid');
+  const statusEl = $('statsStatus');
+  
+  try {
+    const url = `https://raw.githubusercontent.com/${OWNER}/${REPO}/${BRANCH}/stats.json?t=${Date.now()}`;
+    const res = await fetch(url);
+    if (!res.ok) throw new Error('Файл еще не создан');
+    const data = await res.json();
+    const stats = data.stats || {};
+    
+    const cats = [
+      { key: "1", label: ">1 BTC" }, { key: "5", label: ">5 BTC" },
+      { key: "10", label: ">10 BTC" }, { key: "20", label: ">20 BTC" },
+      { key: "50", label: ">50 BTC" }, { key: "100", label: ">100 BTC" },
+      { key: "500", label: ">500 BTC" }, { key: "1000", label: ">1000 BTC" }
+    ];
+    
+    grid.innerHTML = cats.map(c => {
+      const count = stats[c.key] || 0;
+      let color = '#089981';
+      if (c.key >= "100") color = '#f7a600';
+      if (c.key >= "500") color = '#f23645';
+      return `
+        <div class="stat-box">
+          <div class="stat-title">${c.label}</div>
+          <div class="stat-num" style="color: ${color}">${count}</div>
+        </div>
+      `;
+    }).join('');
+    
+    statusEl.textContent = 'Обновлено: ' + new Date(data.updated_at).toLocaleString();
+  } catch (e) {
+    grid.innerHTML = `<div style="grid-column: 1 / -1; text-align: center; color: #f23645; padding: 1rem;">Ожидание данных...</div>`;
+    statusEl.textContent = '';
+  }
+}
 
-/* ---------- Загрузка и фильтрация ---------- */
-async function loadRecentTransactions() {
+/* ---------- Загрузка по вашим кошелькам ---------- */
+async function loadWallets() {
   const tbody = $('txTableBody');
   const statusEl = $('txStatus');
   
   try {
-    statusEl.textContent = 'Загрузка истории...';
     const url = `https://raw.githubusercontent.com/${OWNER}/${REPO}/${BRANCH}/wallets_history.json?t=${Date.now()}`;
     const res = await fetch(url);
+    if (!res.ok) throw new Error('Файл еще не создан');
+    const txs = await res.json();
     
-    if (!res.ok) throw new Error('Файл истории еще не создан');
-    
-    allTxs = await res.json();
-    
-    if (allTxs.length === 0) {
+    if (txs.length === 0) {
       tbody.innerHTML = '<tr><td colspan="4" style="text-align:center; padding:1rem; color:#787b86;">Нет транзакций</td></tr>';
-      statusEl.textContent = 'История пуста.';
       return;
     }
     
-    applyFilter();
+    tbody.innerHTML = txs.map(tx => {
+      const btc = (tx.value / 100000000).toFixed(4);
+      const shortAddr = tx.address.slice(0, 8) + '...' + tx.address.slice(-6);
+      return `
+        <tr>
+          <td style="padding: 8px; border: 1px solid #2a2e39;">${tx.time_str}</td>
+          <td style="padding: 8px; border: 1px solid #2a2e39; font-family: monospace; font-size: 0.75rem;">${shortAddr}</td>
+          <td style="padding: 8px; border: 1px solid #2a2e39; color: ${tx.direction === 'IN' ? '#089981' : '#f23645'}; font-weight: 600;">${btc}</td>
+          <td style="padding: 8px; border: 1px solid #2a2e39; color: ${tx.direction === 'IN' ? '#089981' : '#f23645'};">${tx.direction === 'IN' ? '📥 Вход' : '📤 Выход'}</td>
+        </tr>
+      `;
+    }).join('');
     
+    statusEl.textContent = `Показано ${txs.length} транзакций.`;
   } catch (e) {
-    tbody.innerHTML = `<tr><td colspan="4" style="text-align:center; padding:1rem; color:#f23645;">Ошибка: ${e.message}</td></tr>`;
-    statusEl.textContent = 'Подождите, пока бот соберет первые данные.';
-    statusEl.className = 'err';
+    tbody.innerHTML = `<tr><td colspan="4" style="text-align:center; padding:1rem; color:#f23645;">Ожидание данных...</td></tr>`;
+    statusEl.textContent = '';
   }
-}
-
-function filterTxs(minBtc, btn) {
-  currentFilter = minBtc;
-  // Обновляем активную кнопку
-  document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
-  if (btn) btn.classList.add('active');
-  applyFilter();
-}
-
-function applyFilter() {
-  const tbody = $('txTableBody');
-  const statusEl = $('txStatus');
-  
-  const filtered = allTxs.filter(tx => {
-    const btc = tx.value / 100000000;
-    return btc >= currentFilter;
-  });
-  
-  if (filtered.length === 0) {
-    tbody.innerHTML = `<tr><td colspan="4" style="text-align:center; padding:1rem; color:#787b86;">Нет транзакций с суммой >= ${currentFilter} BTC</td></tr>`;
-    statusEl.textContent = `Найдено 0 транзакций.`;
-    return;
-  }
-  
-  tbody.innerHTML = filtered.map(tx => {
-    const btc = (tx.value / 100000000).toFixed(4);
-    const shortAddr = tx.address.slice(0, 8) + '...' + tx.address.slice(-6);
-    
-    // Подсветка алерта (пополнение пустого адреса > 1000 BTC)
-    const isAlert = tx.alert_1000;
-    const rowStyle = isAlert ? 'background-color: #f2364520; border-left: 3px solid #f23645;' : '';
-    
-    return `
-      <tr style="${rowStyle}">
-        <td style="padding: 8px; border: 1px solid #2a2e39;">${tx.time_str}</td>
-        <td style="padding: 8px; border: 1px solid #2a2e39; font-family: monospace; font-size: 0.75rem;">${shortAddr}</td>
-        <td style="padding: 8px; border: 1px solid #2a2e39; color: ${isAlert ? '#f23645' : '#089981'}; font-weight: 600;">${btc}</td>
-        <td style="padding: 8px; border: 1px solid #2a2e39; color: ${tx.direction === 'IN' ? '#089981' : '#f23645'};">${tx.direction === 'IN' ? '📥 Вход' : '📤 Выход'}</td>
-      </tr>
-    `;
-  }).join('');
-  
-  statusEl.textContent = `Показано ${filtered.length} транзакций (фильтр: ${currentFilter === 0 ? 'Все' : '>' + currentFilter + ' BTC'})`;
-  statusEl.className = 'muted';
 }
 
 /* ---------- Кнопка "Наверх" ---------- */
@@ -253,19 +252,12 @@ window.addEventListener('scroll', function() {
   btn.style.display = window.scrollY > 300 ? 'block' : 'none';
 });
 
-/* ---------- Логика графика BTC ---------- */
+/* ---------- График ---------- */
 function initChart() {
     new TradingView.widget({
-        "autosize": true,
-        "symbol": "BINANCE:BTCUSDT",
-        "interval": "240",
-        "timezone": "Etc/UTC",
-        "theme": "dark",
-        "style": "1",
-        "locale": "ru",
-        "enable_publishing": false,
-        "hide_side_toolbar": true,
-        "allow_symbol_change": false,
+        "autosize": true, "symbol": "BINANCE:BTCUSDT", "interval": "240",
+        "timezone": "Etc/UTC", "theme": "dark", "style": "1", "locale": "ru",
+        "enable_publishing": false, "hide_side_toolbar": true, "allow_symbol_change": false,
         "container_id": "tv_chart_container",
         "studies": [
             { id: "MAExp@tv-basicstudies", inputs: { length: 200 } },
@@ -274,6 +266,7 @@ function initChart() {
     });
 }
 
+/* ---------- Управление ботом ---------- */
 function getToken() { return localStorage.getItem(tokenKey) || ''; }
 function updateTokenStatus() {
     const t = getToken();
@@ -300,18 +293,12 @@ async function getFile(path) {
 }
 
 async function putFile(path, data, sha, message) {
-    const body = {
-        message,
-        content: btoa(unescape(encodeURIComponent(JSON.stringify(data, null, 2)))),
-        branch: BRANCH,
-    };
+    const body = { message, content: btoa(unescape(encodeURIComponent(JSON.stringify(data, null, 2)))), branch: BRANCH };
     if (sha) body.sha = sha;
     const r = await fetch(`https://api.github.com/repos/${OWNER}/${REPO}/contents/${path}`, {
-        method: 'PUT',
-        headers: { 'Authorization': `Bearer ${getToken()}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
+        method: 'PUT', headers: { 'Authorization': `Bearer ${getToken()}`, 'Content-Type': 'application/json' }, body: JSON.stringify(body),
     });
-    if (!r.ok) throw new Error(`Ошибка сохранения ${path}: ${r.status} ${await r.text()}`);
+    if (!r.ok) throw new Error(`Ошибка сохранения ${path}: ${r.status}`);
     return r.json();
 }
 
@@ -321,69 +308,42 @@ async function loadDashboard() {
         $('botStatusBadge').className = 'status-badge status-inactive';
         return;
     }
-
     try {
         const { data: cfg } = await getFile(CONFIG_PATH);
         const enabled = cfg ? cfg.enabled : false;
-        
         const badge = $('botStatusBadge');
         if (enabled) {
-            badge.textContent = 'ВКЛЮЧЕН';
-            badge.className = 'status-badge status-active';
-            $('btnEnable').classList.add('btn-disabled');
-            $('btnDisable').classList.remove('btn-disabled');
+            badge.textContent = 'ВКЛЮЧЕН'; badge.className = 'status-badge status-active';
+            $('btnEnable').classList.add('btn-disabled'); $('btnDisable').classList.remove('btn-disabled');
         } else {
-            badge.textContent = 'ВЫКЛЮЧЕН';
-            badge.className = 'status-badge status-inactive';
-            $('btnEnable').classList.remove('btn-disabled');
-            $('btnDisable').classList.add('btn-disabled');
+            badge.textContent = 'ВЫКЛЮЧЕН'; badge.className = 'status-badge status-inactive';
+            $('btnEnable').classList.remove('btn-disabled'); $('btnDisable').classList.add('btn-disabled');
         }
 
         const { data: state } = await getFile(STATE_PATH);
-        
         if (state && state.status) {
             $('botInfo').style.display = 'block';
-            
-            const statusMap = {
-                "WAITING_NEXT_TRIGGER": "Ждет триггер (16:00)",
-                "WAITING_BREAKOUT": "Ждет пробоя",
-                "WAITING_RETEST": "Ждет ретеста",
-                "IN_TRADE": "В сделке"
-            };
+            const statusMap = { "WAITING_NEXT_TRIGGER": "Ждет триггер", "WAITING_BREAKOUT": "Ждет пробоя", "WAITING_RETEST": "Ждет ретеста", "IN_TRADE": "В сделке" };
             $('infoState').textContent = statusMap[state.status] || state.status;
-            
-            if (state.trigger_high) {
-                $('triggerInfo').style.display = 'block';
-                $('infoLevel').textContent = state.trigger_high;
-            } else {
-                $('triggerInfo').style.display = 'none';
-            }
+            if (state.trigger_high) { $('triggerInfo').style.display = 'block'; $('infoLevel').textContent = state.trigger_high; } 
+            else { $('triggerInfo').style.display = 'none'; }
 
             const tradesDiv = $('activeTradesList');
             if (state.active_trades && state.active_trades.length > 0) {
                 tradesDiv.innerHTML = state.active_trades.map(t => `
                     <div class="trade-item ${t.breakeven ? 'breakeven' : ''}">
-                        <strong>Сделка от ${t.date}</strong><br>
-                        Вход: ${t.entry_price} | Стоп: ${t.stop_loss} ${t.breakeven ? '(Безубыток)' : ''}
-                    </div>
-                `).join('');
-            } else {
-                tradesDiv.innerHTML = 'Нет активных сделок';
-            }
-            
-            if (state.status.includes('WAITING')) {
-                badge.classList.add('status-waiting');
-            }
+                        <strong>Сделка от ${t.date}</strong><br>Вход: ${t.entry_price} | Стоп: ${t.stop_loss}
+                    </div>`).join('');
+            } else { tradesDiv.innerHTML = 'Нет активных сделок'; }
+            if (state.status.includes('WAITING')) badge.classList.add('status-waiting');
         } else {
             $('botInfo').style.display = 'block';
             $('infoState').textContent = 'Ожидание первого запуска бота';
             $('triggerInfo').style.display = 'none';
             $('activeTradesList').innerHTML = 'Нет активных сделок';
         }
-
         $('globalStatus').textContent = 'Обновлено: ' + new Date().toLocaleTimeString();
         $('globalStatus').className = 'ok';
-
     } catch (e) {
         $('globalStatus').textContent = e.message;
         $('globalStatus').className = 'err';
@@ -392,27 +352,20 @@ async function loadDashboard() {
 
 async function setBotState(enable) {
     if (!getToken()) return alert('Сначала введите токен!');
-    
     const btn = enable ? $('btnEnable') : $('btnDisable');
     const originalText = btn.textContent;
-    btn.textContent = '...';
-    btn.disabled = true;
-
+    btn.textContent = '...'; btn.disabled = true;
     try {
         const { sha } = await getFile(CONFIG_PATH);
-        const newData = { enabled: enable };
-        await putFile(CONFIG_PATH, newData, sha, enable ? 'Bot enabled' : 'Bot disabled');
+        await putFile(CONFIG_PATH, { enabled: enable }, sha, enable ? 'Bot enabled' : 'Bot disabled');
         await loadDashboard();
-    } catch (e) {
-        alert('Ошибка: ' + e.message);
-    } finally {
-        btn.textContent = originalText;
-        btn.disabled = false;
-    }
+    } catch (e) { alert('Ошибка: ' + e.message); } 
+    finally { btn.textContent = originalText; btn.disabled = false; }
 }
 
 document.addEventListener('DOMContentLoaded', () => {
-    loadRecentTransactions();
+    loadStats();
+    loadWallets();
     initChart();
     updateTokenStatus();
     if (getToken()) loadDashboard();
