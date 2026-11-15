@@ -63,6 +63,9 @@
   .stat-box { background: #131722; border: 1px solid #2a2e39; border-radius: 8px; padding: 1rem; text-align: center; }
   .stat-title { font-size: 0.85rem; color: #787b86; margin-bottom: 0.5rem; }
   .stat-num { font-size: 1.5rem; font-weight: 700; color: #089981; }
+
+  .tx-link { color: #089981; text-decoration: none; border-bottom: 1px dashed #089981; }
+  .tx-link:hover { color: #067a66; border-bottom: 1px solid #067a66; }
 </style>
 </head>
 <body>
@@ -113,14 +116,14 @@
 <div class="container" id="walletsCardContainer" style="margin-bottom: 1rem; display: none;">
   <div class="card">
     <h2 style="font-size: 1.1rem; margin-top: 0; margin-bottom: 1rem; text-align: center;">
-      👁️ Транзакции по вашим кошелькам
+      👁️ Транзакции по вашим кошелькам (за 24ч)
     </h2>
     <div style="overflow-x: auto;">
       <table id="txTable" style="width: 100%; border-collapse: collapse; font-size: 0.85rem;">
         <thead>
           <tr style="background: #2a2e39; text-align: left;">
             <th style="padding: 8px; border: 1px solid #2a2e39;">Время (UTC)</th>
-            <th style="padding: 8px; border: 1px solid #2a2e39;">Адрес</th>
+            <th style="padding: 8px; border: 1px solid #2a2e39;">Адрес / Баланс</th>
             <th style="padding: 8px; border: 1px solid #2a2e39;">Сумма (BTC)</th>
             <th style="padding: 8px; border: 1px solid #2a2e39;">Направление</th>
           </tr>
@@ -309,19 +312,24 @@ async function loadWallets() {
     if (!res.ok) throw new Error('Файл еще не создан');
     const txs = await res.json();
     
-    // Если данных нет, оставляем контейнер скрытым и выходим
     if (!txs || txs.length === 0) {
       return; 
     }
     
-    // Если данные есть, отрисовываем их и показываем блок
     tbody.innerHTML = txs.map(tx => {
       const btc = (tx.value / 100000000).toFixed(4);
       const shortAddr = tx.address.slice(0, 8) + '...' + tx.address.slice(-6);
+      
+      const bal = tx.balance !== undefined ? (tx.balance / 100000000).toFixed(4) : '?';
+      const link = `https://blockstream.info/address/${tx.address}`;
+
       return `
         <tr>
           <td style="padding: 8px; border: 1px solid #2a2e39;">${tx.time_str}</td>
-          <td style="padding: 8px; border: 1px solid #2a2e39; font-family: monospace; font-size: 0.75rem;">${shortAddr}</td>
+          <td style="padding: 8px; border: 1px solid #2a2e39;">
+            <a href="${link}" target="_blank" class="tx-link" style="font-family: monospace; font-size: 0.75rem;">${shortAddr}</a>
+            <div style="font-size: 0.7rem; color: #787b86; margin-top: 2px;">Баланс: <b>${bal} BTC</b></div>
+          </td>
           <td style="padding: 8px; border: 1px solid #2a2e39; color: ${tx.direction === 'IN' ? '#089981' : '#f23645'}; font-weight: 600;">${btc}</td>
           <td style="padding: 8px; border: 1px solid #2a2e39; color: ${tx.direction === 'IN' ? '#089981' : '#f23645'};">${tx.direction === 'IN' ? '📥 Вход' : '📤 Выход'}</td>
         </tr>
@@ -329,12 +337,9 @@ async function loadWallets() {
     }).join('');
     
     statusEl.textContent = `Показано ${txs.length} транзакций.`;
-    
-    // Показываем блок
     container.style.display = 'block';
     
   } catch (e) {
-    // При ошибке (файла нет) блок также остается скрытым
     console.log('Нет данных по кошелькам:', e.message);
   }
 }
