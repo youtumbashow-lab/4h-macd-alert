@@ -57,7 +57,6 @@
   .trade-item { background: #131722; padding: 0.8rem; border-radius: 4px; margin-bottom: 0.5rem; border-left: 3px solid #f7a600; font-size: 0.9rem; }
   .trade-item.breakeven { border-left-color: #089981; }
 
-  /* Стили для плиток статистики */
   .stats-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 0.8rem; margin-top: 1rem; }
   @media (min-width: 600px) { .stats-grid { grid-template-columns: repeat(4, 1fr); } }
   
@@ -68,7 +67,7 @@
 </head>
 <body>
 
-<!-- ================= СТАТИСТИКА СЕТИ ================= -->
+<!-- ================= ПЛИТКИ СТАТИСТИКИ ================= -->
 <div class="container" style="margin-bottom: 1rem;">
   <div class="card">
     <h2 style="font-size: 1.1rem; margin-top: 0; margin-bottom: 1rem; text-align: center;">
@@ -78,6 +77,35 @@
       <div style="grid-column: 1 / -1; text-align: center; color: #787b86; padding: 1rem;">Загрузка...</div>
     </div>
     <p class="muted" id="statsStatus" style="margin-top: 1rem;"></p>
+  </div>
+</div>
+
+<!-- ================= ИСТОРИЯ ДНЕЙ ================= -->
+<div class="container" style="margin-bottom: 1rem;">
+  <div class="card">
+    <h2 style="font-size: 1.1rem; margin-top: 0; margin-bottom: 1rem; text-align: center;">
+      📅 История по дням
+    </h2>
+    <div style="overflow-x: auto;">
+      <table id="historyTable" style="width: 100%; border-collapse: collapse; font-size: 0.85rem;">
+        <thead>
+          <tr style="background: #2a2e39; text-align: left;">
+            <th style="padding: 8px; border: 1px solid #2a2e39;">Дата</th>
+            <th style="padding: 8px; border: 1px solid #2a2e39; text-align: center;">>1 BTC</th>
+            <th style="padding: 8px; border: 1px solid #2a2e39; text-align: center;">>10 BTC</th>
+            <th style="padding: 8px; border: 1px solid #2a2e39; text-align: center;">>100 BTC</th>
+            <th style="padding: 8px; border: 1px solid #2a2e39; text-align: center;">>1000 BTC</th>
+          </tr>
+        </thead>
+        <tbody id="historyTableBody">
+          <tr><td colspan="5" style="text-align: center; padding: 1rem; color: #787b86;">Загрузка...</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <button id="loadMoreHistoryBtn" onclick="showMoreHistory()" class="btn-on" style="margin-top: 1rem; width: 100%; display: none;">
+      Ещё
+    </button>
+    <p class="muted" id="historyStatus" style="margin-top: 0.8rem;"></p>
   </div>
 </div>
 
@@ -171,7 +199,10 @@ const STATE_PATH  = 'bot_state.json';
 const $ = id => document.getElementById(id);
 const tokenKey = 'gh_pat_bot_dashboard';
 
-/* ---------- Загрузка статистики сети ---------- */
+let allHistory = [];
+let historyExpanded = false;
+
+/* ---------- Загрузка плиток ---------- */
 async function loadStats() {
   const grid = $('statsGrid');
   const statusEl = $('statsStatus');
@@ -210,7 +241,67 @@ async function loadStats() {
   }
 }
 
-/* ---------- Загрузка по вашим кошелькам ---------- */
+/* ---------- Загрузка истории ---------- */
+async function loadHistory() {
+  const tbody = $('historyTableBody');
+  const statusEl = $('historyStatus');
+  
+  try {
+    const url = `https://raw.githubusercontent.com/${OWNER}/${REPO}/${BRANCH}/history.json?t=${Date.now()}`;
+    const res = await fetch(url);
+    if (!res.ok) throw new Error('Файл истории еще не создан');
+    
+    allHistory = await res.json();
+    renderHistory();
+    
+    statusEl.textContent = `Всего дней в истории: ${allHistory.length}`;
+  } catch (e) {
+    tbody.innerHTML = `<tr><td colspan="5" style="text-align:center; padding:1rem; color:#f23645;">Ожидание данных...</td></tr>`;
+    statusEl.textContent = '';
+  }
+}
+
+function renderHistory() {
+  const tbody = $('historyTableBody');
+  const btn = $('loadMoreHistoryBtn');
+  
+  if (allHistory.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="5" style="text-align:center; padding:1rem; color:#787b86;">История пуста</td></tr>';
+    btn.style.display = 'none';
+    return;
+  }
+  
+  // Показываем 10 дней, или все, если нажата кнопка "Ещё"
+  const limit = historyExpanded ? allHistory.length : 10;
+  const toShow = allHistory.slice(0, limit);
+  
+  tbody.innerHTML = toShow.map(day => {
+    const s = day.stats || {};
+    return `
+      <tr>
+        <td style="padding: 8px; border: 1px solid #2a2e39; font-weight: 600;">${day.date}</td>
+        <td style="padding: 8px; border: 1px solid #2a2e39; text-align: center; color: #089981;">${s["1"] || 0}</td>
+        <td style="padding: 8px; border: 1px solid #2a2e39; text-align: center; color: #089981;">${s["10"] || 0}</td>
+        <td style="padding: 8px; border: 1px solid #2a2e39; text-align: center; color: #f7a600;">${s["100"] || 0}</td>
+        <td style="padding: 8px; border: 1px solid #2a2e39; text-align: center; color: #f23645;">${s["1000"] || 0}</td>
+      </tr>
+    `;
+  }).join('');
+  
+  // Показываем кнопку "Ещё", если есть скрытые дни
+  if (allHistory.length > 10 && !historyExpanded) {
+    btn.style.display = 'block';
+  } else {
+    btn.style.display = 'none';
+  }
+}
+
+function showMoreHistory() {
+  historyExpanded = true;
+  renderHistory();
+}
+
+/* ---------- Загрузка по кошелькам ---------- */
 async function loadWallets() {
   const tbody = $('txTableBody');
   const statusEl = $('txStatus');
@@ -324,52 +415,4 @@ async function loadDashboard() {
         if (state && state.status) {
             $('botInfo').style.display = 'block';
             const statusMap = { "WAITING_NEXT_TRIGGER": "Ждет триггер", "WAITING_BREAKOUT": "Ждет пробоя", "WAITING_RETEST": "Ждет ретеста", "IN_TRADE": "В сделке" };
-            $('infoState').textContent = statusMap[state.status] || state.status;
-            if (state.trigger_high) { $('triggerInfo').style.display = 'block'; $('infoLevel').textContent = state.trigger_high; } 
-            else { $('triggerInfo').style.display = 'none'; }
-
-            const tradesDiv = $('activeTradesList');
-            if (state.active_trades && state.active_trades.length > 0) {
-                tradesDiv.innerHTML = state.active_trades.map(t => `
-                    <div class="trade-item ${t.breakeven ? 'breakeven' : ''}">
-                        <strong>Сделка от ${t.date}</strong><br>Вход: ${t.entry_price} | Стоп: ${t.stop_loss}
-                    </div>`).join('');
-            } else { tradesDiv.innerHTML = 'Нет активных сделок'; }
-            if (state.status.includes('WAITING')) badge.classList.add('status-waiting');
-        } else {
-            $('botInfo').style.display = 'block';
-            $('infoState').textContent = 'Ожидание первого запуска бота';
-            $('triggerInfo').style.display = 'none';
-            $('activeTradesList').innerHTML = 'Нет активных сделок';
-        }
-        $('globalStatus').textContent = 'Обновлено: ' + new Date().toLocaleTimeString();
-        $('globalStatus').className = 'ok';
-    } catch (e) {
-        $('globalStatus').textContent = e.message;
-        $('globalStatus').className = 'err';
-    }
-}
-
-async function setBotState(enable) {
-    if (!getToken()) return alert('Сначала введите токен!');
-    const btn = enable ? $('btnEnable') : $('btnDisable');
-    const originalText = btn.textContent;
-    btn.textContent = '...'; btn.disabled = true;
-    try {
-        const { sha } = await getFile(CONFIG_PATH);
-        await putFile(CONFIG_PATH, { enabled: enable }, sha, enable ? 'Bot enabled' : 'Bot disabled');
-        await loadDashboard();
-    } catch (e) { alert('Ошибка: ' + e.message); } 
-    finally { btn.textContent = originalText; btn.disabled = false; }
-}
-
-document.addEventListener('DOMContentLoaded', () => {
-    loadStats();
-    loadWallets();
-    initChart();
-    updateTokenStatus();
-    if (getToken()) loadDashboard();
-});
-</script>
-</body>
-</html>
+            $('infoState
