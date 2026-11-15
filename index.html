@@ -415,4 +415,53 @@ async function loadDashboard() {
         if (state && state.status) {
             $('botInfo').style.display = 'block';
             const statusMap = { "WAITING_NEXT_TRIGGER": "Ждет триггер", "WAITING_BREAKOUT": "Ждет пробоя", "WAITING_RETEST": "Ждет ретеста", "IN_TRADE": "В сделке" };
-            $('infoState
+            $('infoState').textContent = statusMap[state.status] || state.status;
+            if (state.trigger_high) { $('triggerInfo').style.display = 'block'; $('infoLevel').textContent = state.trigger_high; } 
+            else { $('triggerInfo').style.display = 'none'; }
+
+            const tradesDiv = $('activeTradesList');
+            if (state.active_trades && state.active_trades.length > 0) {
+                tradesDiv.innerHTML = state.active_trades.map(t => `
+                    <div class="trade-item ${t.breakeven ? 'breakeven' : ''}">
+                        <strong>Сделка от ${t.date}</strong><br>Вход: ${t.entry_price} | Стоп: ${t.stop_loss}
+                    </div>`).join('');
+            } else { tradesDiv.innerHTML = 'Нет активных сделок'; }
+            if (state.status.includes('WAITING')) badge.classList.add('status-waiting');
+        } else {
+            $('botInfo').style.display = 'block';
+            $('infoState').textContent = 'Ожидание первого запуска бота';
+            $('triggerInfo').style.display = 'none';
+            $('activeTradesList').innerHTML = 'Нет активных сделок';
+        }
+        $('globalStatus').textContent = 'Обновлено: ' + new Date().toLocaleTimeString();
+        $('globalStatus').className = 'ok';
+    } catch (e) {
+        $('globalStatus').textContent = e.message;
+        $('globalStatus').className = 'err';
+    }
+}
+
+async function setBotState(enable) {
+    if (!getToken()) return alert('Сначала введите токен!');
+    const btn = enable ? $('btnEnable') : $('btnDisable');
+    const originalText = btn.textContent;
+    btn.textContent = '...'; btn.disabled = true;
+    try {
+        const { sha } = await getFile(CONFIG_PATH);
+        await putFile(CONFIG_PATH, { enabled: enable }, sha, enable ? 'Bot enabled' : 'Bot disabled');
+        await loadDashboard();
+    } catch (e) { alert('Ошибка: ' + e.message); } 
+    finally { btn.textContent = originalText; btn.disabled = false; }
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+    loadStats();
+    loadHistory();
+    loadWallets();
+    initChart();
+    updateTokenStatus();
+    if (getToken()) loadDashboard();
+});
+</script>
+</body>
+</html>
