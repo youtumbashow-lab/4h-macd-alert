@@ -322,15 +322,21 @@ async function loadWallets() {
       
       const bal = tx.balance !== undefined ? (tx.balance / 100000000).toFixed(4) : '?';
       const link = `https://blockstream.info/address/${tx.address}`;
+      
+      const isAlert = tx.alert_1000;
+      const rowStyle = isAlert ? 'background-color: #f2364520; border-left: 3px solid #f23645;' : '';
+      const alertText = isAlert ? ' 🚨 <b>Пополнение пустого >1000 BTC</b>' : '';
 
       return `
-        <tr>
+        <tr style="${rowStyle}">
           <td style="padding: 8px; border: 1px solid #2a2e39;">${tx.time_str}</td>
           <td style="padding: 8px; border: 1px solid #2a2e39;">
             <a href="${link}" target="_blank" class="tx-link" style="font-family: monospace; font-size: 0.75rem;">${shortAddr}</a>
             <div style="font-size: 0.7rem; color: #787b86; margin-top: 2px;">Баланс: <b>${bal} BTC</b></div>
           </td>
-          <td style="padding: 8px; border: 1px solid #2a2e39; color: ${tx.direction === 'IN' ? '#089981' : '#f23645'}; font-weight: 600;">${btc}</td>
+          <td style="padding: 8px; border: 1px solid #2a2e39; color: ${tx.direction === 'IN' ? '#089981' : '#f23645'}; font-weight: 600;">
+            ${btc} ${alertText}
+          </td>
           <td style="padding: 8px; border: 1px solid #2a2e39; color: ${tx.direction === 'IN' ? '#089981' : '#f23645'};">${tx.direction === 'IN' ? '📥 Вход' : '📤 Выход'}</td>
         </tr>
       `;
