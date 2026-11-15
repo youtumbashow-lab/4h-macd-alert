@@ -75,7 +75,7 @@ def scan_network_stats():
         return
         
     tip = int(tip_str)
-    start = tip - 144  # 24 часа (144 блока)
+    start = tip - 144  # 24 часа
     
     stats = {str(cat): 0 for cat in CATEGORIES}
     
@@ -90,7 +90,7 @@ def scan_network_stats():
             if not isinstance(txids, list):
                 continue
                 
-            for txid in txids[:100]: # Берем первые 100 транзакций из блока
+            for txid in txids[:100]:
                 tx = safe_get_json(f"{API_URL}/tx/{txid}")
                 if not isinstance(tx, dict) or 'vout' not in tx:
                     continue
@@ -124,7 +124,7 @@ def scan_network_stats():
     print(f"Статистика сохранена. Дней в истории: {len(history)}")
 
 def scan_wallets():
-    print("Сканируем ваши адреса (за последние 24 часа)...")
+    print("Сканируем ваши адреса (за последние 24 часа) и балансы...")
     history = []
     if os.path.exists(WALLETS_FILE):
         with open(WALLETS_FILE, 'r') as f:
@@ -135,6 +135,15 @@ def scan_wallets():
     
     for addr in WALLETS:
         try:
+            # 1. Получаем баланс кошелька
+            addr_info = safe_get_json(f"{API_URL}/address/{addr}")
+            balance = 0
+            if isinstance(addr_info, dict):
+                funded = addr_info.get('chain_stats', {}).get('funded_txo_sum', 0)
+                spent = addr_info.get('chain_stats', {}).get('spent_txo_sum', 0)
+                balance = funded - spent
+
+            # 2. Получаем транзакции
             txs = safe_get_json(f"{API_URL}/address/{addr}/txs")
             if not isinstance(txs, list):
                 continue
@@ -164,6 +173,7 @@ def scan_wallets():
                         'txid': txid,
                         'time_str': datetime.fromtimestamp(block_time, timezone.utc).strftime('%Y-%m-%d %H:%M:%S'),
                         'address': addr,
+                        'balance': balance,
                         'value': total,
                         'direction': direction
                     })
@@ -172,7 +182,7 @@ def scan_wallets():
         except Exception as e:
             print(f"Ошибка при проверке {addr[:10]}: {e}")
 
-    # Очищаем старые записи
+    # Очищаем старые записи (старше 24 часов)
     history = [tx for tx in history if (now_ts - datetime.strptime(tx['time_str'], '%Y-%m-%d %H:%M:%S').replace(tzinfo=timezone.utc).timestamp()) <= 86400]
     history.sort(key=lambda x: x['time_str'], reverse=True)
     
