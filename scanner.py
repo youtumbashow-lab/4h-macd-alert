@@ -75,7 +75,7 @@ def scan_network_stats():
         return
         
     tip = int(tip_str)
-    start = tip - 144  # 24 часа
+    start = tip - 144  # 24 часа (144 блока)
     
     stats = {str(cat): 0 for cat in CATEGORIES}
     
@@ -90,7 +90,7 @@ def scan_network_stats():
             if not isinstance(txids, list):
                 continue
                 
-            for txid in txids[:100]:
+            for txid in txids[:100]: # Берем первые 100 транзакций из блока
                 tx = safe_get_json(f"{API_URL}/tx/{txid}")
                 if not isinstance(tx, dict) or 'vout' not in tx:
                     continue
@@ -135,18 +135,21 @@ def scan_wallets():
     
     for addr in WALLETS:
         try:
-            # 1. Получаем баланс кошелька
+            # 1. Получаем текущий баланс кошелька
             addr_info = safe_get_json(f"{API_URL}/address/{addr}")
-            balance = 0
+            current_balance = 0
             if isinstance(addr_info, dict):
                 funded = addr_info.get('chain_stats', {}).get('funded_txo_sum', 0)
                 spent = addr_info.get('chain_stats', {}).get('spent_txo_sum', 0)
-                balance = funded - spent
+                current_balance = funded - spent
 
             # 2. Получаем транзакции
             txs = safe_get_json(f"{API_URL}/address/{addr}/txs")
             if not isinstance(txs, list):
                 continue
+            
+            # Сортируем от старых к новым для правильного расчета баланса
+            txs.sort(key=lambda x: x.get('status', {}).get('block_time', 0))
                 
             for tx in txs:
                 if not isinstance(tx, dict):
@@ -157,8 +160,6 @@ def scan_wallets():
                     continue
                 
                 block_time = tx.get('status', {}).get('block_time', 0)
-                
-                # Фильтр 24 часа (86400 секунд)
                 if not block_time or (now_ts - block_time > 86400):
                     continue
                     
@@ -168,14 +169,20 @@ def scan_wallets():
                 total = received if received > 0 else sent
                 direction = "IN" if received > 0 else "OUT"
                 
+                # Проверка: Входящая >= 1000 BTC, а баланс до этого был 0
+                is_alert = False
+                if direction == "IN" and total >= 100000000000 and current_balance - total <= 0:
+                    is_alert = True
+                
                 if total > 0:
                     history.append({
                         'txid': txid,
                         'time_str': datetime.fromtimestamp(block_time, timezone.utc).strftime('%Y-%m-%d %H:%M:%S'),
                         'address': addr,
-                        'balance': balance,
+                        'balance': current_balance,
                         'value': total,
-                        'direction': direction
+                        'direction': direction,
+                        'alert_1000': is_alert
                     })
                     seen_txids.add(txid)
             time.sleep(0.5)
