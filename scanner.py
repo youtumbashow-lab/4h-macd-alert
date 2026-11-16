@@ -44,7 +44,7 @@ WALLETS = [
     "16vYYR5uHkdoRW7XbVzrwjyXvVwWokpEao"
 ]
 
- = [1, 5, 10, 20, 50, 100, 500, 1000]
+CATEGORIES = [1, 5, 10, 20, 50, 100, 500, 1000]
 
 def safe_get_json(url):
     try:
@@ -79,7 +79,7 @@ def scan_network_stats():
     
     stats = {str(cat): 0 for cat in CATEGORIES}
     
-    # Сканируем каждый 3-й блок для экономии времени
+    # Сканируем КАЖДЫЙ блок (без пропусков)
     for height in range(tip, start, -1):
         try:
             block_hash = safe_get_text(f"{API_URL}/block-height/{height}")
