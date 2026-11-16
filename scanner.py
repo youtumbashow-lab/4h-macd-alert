@@ -79,7 +79,7 @@ def scan_network_stats():
     
     stats = {str(cat): 0 for cat in CATEGORIES}
     
-    # Сканируем КАЖДЫЙ блок (без пропусков)
+    # Сканируем каждый блок
     for height in range(tip, start, -1):
         try:
             block_hash = safe_get_text(f"{API_URL}/block-height/{height}")
@@ -90,7 +90,7 @@ def scan_network_stats():
             if not isinstance(txids, list):
                 continue
                 
-            for txid in txids[:100]: # Берем первые 100 транзакций из блока
+            for txid in txids: # <--- ТЕПЕРЬ БЕЗ ОГРАНИЧЕНИЙ (ВСЕ ТРАНЗАКЦИИ)
                 tx = safe_get_json(f"{API_URL}/tx/{txid}")
                 if not isinstance(tx, dict) or 'vout' not in tx:
                     continue
@@ -148,7 +148,7 @@ def scan_wallets():
             if not isinstance(txs, list):
                 continue
             
-            # Сортируем от старых к новым для правильного расчета баланса
+            # Сортируем от старых к новым
             txs.sort(key=lambda x: x.get('status', {}).get('block_time', 0))
                 
             for tx in txs:
