@@ -90,18 +90,22 @@
       📅 История по дням
     </h2>
     <div style="overflow-x: auto;">
-      <table id="historyTable" style="width: 100%; border-collapse: collapse; font-size: 0.85rem;">
+      <table id="historyTable" style="width: 100%; border-collapse: collapse; font-size: 0.85rem; white-space: nowrap;">
         <thead>
           <tr style="background: #2a2e39; text-align: left;">
             <th style="padding: 8px; border: 1px solid #2a2e39;">Дата</th>
             <th style="padding: 8px; border: 1px solid #2a2e39; text-align: center;">>1 BTC</th>
+            <th style="padding: 8px; border: 1px solid #2a2e39; text-align: center;">>5 BTC</th>
             <th style="padding: 8px; border: 1px solid #2a2e39; text-align: center;">>10 BTC</th>
+            <th style="padding: 8px; border: 1px solid #2a2e39; text-align: center;">>20 BTC</th>
+            <th style="padding: 8px; border: 1px solid #2a2e39; text-align: center;">>50 BTC</th>
             <th style="padding: 8px; border: 1px solid #2a2e39; text-align: center;">>100 BTC</th>
+            <th style="padding: 8px; border: 1px solid #2a2e39; text-align: center;">>500 BTC</th>
             <th style="padding: 8px; border: 1px solid #2a2e39; text-align: center;">>1000 BTC</th>
           </tr>
         </thead>
         <tbody id="historyTableBody">
-          <tr><td colspan="5" style="text-align: center; padding: 1rem; color: #787b86;">Загрузка...</td></tr>
+          <tr><td colspan="9" style="text-align: center; padding: 1rem; color: #787b86;">Загрузка...</td></tr>
         </tbody>
       </table>
     </div>
@@ -257,7 +261,7 @@ async function loadHistory() {
     
     statusEl.textContent = `Всего дней в истории: ${allHistory.length}`;
   } catch (e) {
-    tbody.innerHTML = `<tr><td colspan="5" style="text-align:center; padding:1rem; color:#f23645;">Ожидание данных...</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="9" style="text-align:center; padding:1rem; color:#f23645;">Ожидание данных...</td></tr>`;
     statusEl.textContent = '';
   }
 }
@@ -267,7 +271,7 @@ function renderHistory() {
   const btn = $('loadMoreHistoryBtn');
   
   if (allHistory.length === 0) {
-    tbody.innerHTML = '<tr><td colspan="5" style="text-align:center; padding:1rem; color:#787b86;">История пуста</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="9" style="text-align:center; padding:1rem; color:#787b86;">История пуста</td></tr>';
     btn.style.display = 'none';
     return;
   }
@@ -281,8 +285,12 @@ function renderHistory() {
       <tr>
         <td style="padding: 8px; border: 1px solid #2a2e39; font-weight: 600;">${day.date}</td>
         <td style="padding: 8px; border: 1px solid #2a2e39; text-align: center; color: #089981;">${s["1"] || 0}</td>
+        <td style="padding: 8px; border: 1px solid #2a2e39; text-align: center; color: #089981;">${s["5"] || 0}</td>
         <td style="padding: 8px; border: 1px solid #2a2e39; text-align: center; color: #089981;">${s["10"] || 0}</td>
+        <td style="padding: 8px; border: 1px solid #2a2e39; text-align: center; color: #f7a600;">${s["20"] || 0}</td>
+        <td style="padding: 8px; border: 1px solid #2a2e39; text-align: center; color: #f7a600;">${s["50"] || 0}</td>
         <td style="padding: 8px; border: 1px solid #2a2e39; text-align: center; color: #f7a600;">${s["100"] || 0}</td>
+        <td style="padding: 8px; border: 1px solid #2a2e39; text-align: center; color: #f23645;">${s["500"] || 0}</td>
         <td style="padding: 8px; border: 1px solid #2a2e39; text-align: center; color: #f23645;">${s["1000"] || 0}</td>
       </tr>
     `;
