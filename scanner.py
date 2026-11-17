@@ -171,11 +171,17 @@ def scan_wallets():
         except Exception as e:
             print(f"Ошибка при проверке {addr[:10]}: {e}")
 
-    history = [tx for tx in history if (now_ts - datetime.strptime(tx['time_str'], '%Y-%m-%d %H:%M:%S').replace(tzinfo=timezone.utc).timestamp()) <= 86400]
-    history.sort(key=lambda x: x['time_str'], reverse=True)
+    # ОЧИСТКА: Удаляем всё, что старше 24 часов или меньше 1 BTC
+    cleaned_history = []
+    for tx in history:
+        tx_time = datetime.strptime(tx['time_str'], '%Y-%m-%d %H:%M:%S').replace(tzinfo=timezone.utc).timestamp()
+        if (now_ts - tx_time <= 86400) and (tx['value'] >= 100000000):
+            cleaned_history.append(tx)
+
+    cleaned_history.sort(key=lambda x: x['time_str'], reverse=True)
     
     with open(WALLETS_FILE, 'w') as f:
-        json.dump(history[:500], f)
+        json.dump(cleaned_history[:500], f)
     print("Сканирование адресов завершено.")
 
 if __name__ == "__main__":
