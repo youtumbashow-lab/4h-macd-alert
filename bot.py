@@ -96,6 +96,12 @@ def main():
     
     now = datetime.now(timezone.utc).timestamp() * 1000
 
+    # Получаем 4h и 1d свечи
+    klines_4h = get_klines(SYMBOL, TF_4H, limit=10)
+    closed_4h = [k for k in klines_4h if k[6] < now]
+    last_4h = closed_4h[-1]
+    high_4h, low_4h, close_4h = float(last_4h[2]), float(last_4h[3]), float(last_4h[4])
+
     # --- 1. ТРЕЙЛИНГ-СТОП (по дневным свечам) ---
     if state["active_trades"]:
         klines_1d = get_klines(SYMBOL, TF_1D, limit=3)
@@ -117,21 +123,25 @@ def main():
                     send_telegram(msg); send_email("Трейлинг", msg)
             save_json(STATE_PATH, state)
 
-    # --- 2. СТОП-ЛОСС (по 4h свечам) ---
-    klines_4h = get_klines(SYMBOL, TF_4H, limit=10)
-    closed_4h = [k for k in klines_4h if k[6] < now]
-    
+    # --- 2. СТОП-ЛОСС И ЧАСТИЧНОЕ ЗАКРЫТИЕ (по 4h свечам) ---
     for trade in list(state["active_trades"]):
-        for k in closed_4h:
-            low = float(k[3])
-            if low <= trade["stop_loss"]:
-                msg = f"🔴 СТОП-ЛОСС {trade['date']} на {trade['stop_loss']}"
-                send_telegram(msg); send_email("СТОП-ЛОСС", msg)
-                state["active_trades"].remove(trade)
-                state["macd_filter"] = False
-                save_json(STATE_PATH, state)
-                commit_files_to_repo(["bot_state.json"])
-                break
+        # Проверка на стоп-лосс
+        if low_4h <= trade["stop_loss"]:
+            msg = f"🔴 СТОП-ЛОСС {trade['date']} на {trade['stop_loss']}"
+            send_telegram(msg); send_email("СТОП-ЛОСС", msg)
+            state["active_trades"].remove(trade)
+            state["macd_filter"] = False
+            save_json(STATE_PATH, state)
+            commit_files_to_repo(["bot_state.json"])
+            continue
+        
+        # Проверка на частичное закрытие (если 4h закрылась ниже входа)
+        if close_4h < trade["entry_price"] and not trade.get("closed_50", False):
+            trade["closed_50"] = True
+            msg = f"✂️ Закрыто 50% по сделке {trade['date']} (свеча закрылась ниже уровня входа).\nПродолжаем держать оставшуюся часть."
+            send_telegram(msg); send_email("Закрыто 50%", msg)
+            save_json(STATE_PATH, state)
+            commit_files_to_repo(["bot_state.json"])
 
     # --- 3. ТРИГГЕР (по ДНЕВНОЙ свече) ---
     klines_1d = get_klines(SYMBOL, TF_1D, limit=100)
@@ -145,10 +155,8 @@ def main():
     daily_high = float(last_daily[2])
     trigger_date_str = daily_open_time.strftime("%Y-%m-%d")
 
-    # Если это новая дневная свеча (которой еще не было в стейте)
     if state["last_trigger_date"] != trigger_date_str:
         state["last_trigger_date"] = trigger_date_str
-        
         macd_signal = calculate_macd_signal(closed_1d)
         condition_met = state["macd_filter"] and (macd_signal < 0) or not state["macd_filter"]
         
@@ -162,13 +170,9 @@ def main():
             msg = f"⚠️ Триггер {trigger_date_str} отменен. MACD: {macd_signal:.4f}"
             send_telegram(msg); send_email("Отмена", msg)
             save_json(STATE_PATH, state)
-        # После установки/отмены триггера ждем следующего закрытия
         return
 
     # --- 4. ВХОД (проверяем по 4h свечам) ---
-    last_4h = closed_4h[-1]
-    high_4h, low_4h, close_4h = float(last_4h[2]), float(last_4h[3]), float(last_4h[4])
-
     if state["status"] == "WAITING_BREAKOUT" and close_4h > state["trigger_high"]:
         state["status"] = "WAITING_RETEST"
         save_json(STATE_PATH, state)
@@ -176,7 +180,13 @@ def main():
         send_telegram(msg); send_email("Пробой", msg)
 
     elif state["status"] == "WAITING_RETEST" and low_4h <= state["trigger_high"]:
-        new_trade = {"date": state["trigger_date"], "entry_price": state["trigger_high"], "stop_loss": round(state["trigger_high"]*0.98, 2), "breakeven": False}
+        new_trade = {
+            "date": state["trigger_date"], 
+            "entry_price": state["trigger_high"], 
+            "stop_loss": round(state["trigger_high"]*0.98, 2), 
+            "breakeven": False,
+            "closed_50": False # <--- НОВОЕ ПОЛЕ
+        }
         state["active_trades"].append(new_trade)
         state["status"], state["macd_filter"] = "WAITING_NEXT_TRIGGER", True
         msg = f"🟢 БАЙ {new_trade['entry_price']}, SL {new_trade['stop_loss']}"
