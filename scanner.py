@@ -4,8 +4,10 @@ import os
 import time
 from datetime import datetime, timezone
 
-# ИСПОЛЬЗУЕМ ДРУГОЕ API
-API_URL = "https://blockchain.info"
+# ИСПОЛЬЗУЕМ ДРУГОЕ API ДЛЯ БЛОКОВ
+API_URL_BLOCKCHAIN = "https://blockchain.info"
+# ОСТАВЛЯЕМ BLOCKSTREAM ДЛЯ КОШЕЛЬКОВ
+API_URL_BLOCKSTREAM = "https://blockstream.info/api"
 
 STATS_FILE = "stats.json"
 HISTORY_FILE = "history.json"
@@ -59,8 +61,7 @@ def safe_get_json(url):
 def scan_network_stats():
     print("Сканируем общую статистику сети (Blockchain.com)...")
     
-    # Получаем высоту последнего блока
-    latest_block = safe_get_json(f"{API_URL}/latestblock")
+    latest_block = safe_get_json(f"{API_URL_BLOCKCHAIN}/latestblock")
     if not latest_block:
         print("Не удалось получить высоту блока.")
         return
@@ -70,16 +71,13 @@ def scan_network_stats():
     
     stats = {str(cat): 0 for cat in CATEGORIES}
     
-    # Сканируем каждый блок
     for height in range(tip, start, -1):
         print(f"Сканируем блок {height}...")
         try:
-            # Получаем полный блок (все транзакции)
-            block_data = safe_get_json(f"{API_URL}/block/{height}?format=json")
+            block_data = safe_get_json(f"{API_URL_BLOCKCHAIN}/block/{height}?format=json")
             if not block_data or 'tx' not in block_data:
                 continue
                 
-            # Проходим по КАЖДОЙ транзакции в блоке
             for tx in block_data['tx']:
                 val = sum(out.get('value', 0) for out in tx.get('out', []))
                 btc = val / 100000000
@@ -111,9 +109,6 @@ def scan_network_stats():
     print(f"Статистика сохранена. Дней в истории: {len(history)}")
 
 def scan_wallets():
-    # ... (оставляем без изменений, это код для кошельков) ...
-    # ВАЖНО: Для кошельков мы оставляем Blockstream, так как Blockchain.com 
-    # не очень удобен для поиска по конкретным адресам.
     print("Сканируем ваши адреса (Blockstream)...")
     history = []
     if os.path.exists(WALLETS_FILE):
@@ -125,14 +120,14 @@ def scan_wallets():
     
     for addr in WALLETS:
         try:
-            addr_info = safe_get_json(f"https://blockstream.info/api/address/{addr}")
+            addr_info = safe_get_json(f"{API_URL_BLOCKSTREAM}/address/{addr}")
             current_balance = 0
             if isinstance(addr_info, dict):
                 funded = addr_info.get('chain_stats', {}).get('funded_txo_sum', 0)
                 spent = addr_info.get('chain_stats', {}).get('spent_txo_sum', 0)
                 current_balance = funded - spent
 
-            txs = safe_get_json(f"https://blockstream.info/api/address/{addr}/txs")
+            txs = safe_get_json(f"{API_URL_BLOCKSTREAM}/address/{addr}/txs")
             if not isinstance(txs, list):
                 continue
             
@@ -160,7 +155,8 @@ def scan_wallets():
                 if direction == "IN" and total >= 100000000000 and current_balance - total <= 0:
                     is_alert = True
                 
-                if total > 0:
+                # ФИЛЬТР: Показываем только транзакции от 1 BTC (100 000 000 сатоши)
+                if total >= 100000000:
                     history.append({
                         'txid': txid,
                         'time_str': datetime.fromtimestamp(block_time, timezone.utc).strftime('%Y-%m-%d %H:%M:%S'),
