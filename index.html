@@ -56,6 +56,9 @@
   
   .trade-item { background: #131722; padding: 0.8rem; border-radius: 4px; margin-bottom: 0.5rem; border-left: 3px solid #f7a600; font-size: 0.9rem; }
   .trade-item.breakeven { border-left-color: #089981; }
+  .trade-item.partial { border-left-color: #f23645; } /* Красный цвет для частичного стопа */
+
+  .partial-badge { display: inline-block; padding: 2px 6px; border-radius: 4px; font-size: 0.75rem; margin-left: 6px; background: #f2364533; color: #f23645; border: 1px solid #f23645; }
 
   .stats-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 0.8rem; margin-top: 1rem; }
   @media (min-width: 600px) { .stats-grid { grid-template-columns: repeat(4, 1fr); } }
@@ -116,7 +119,7 @@
   </div>
 </div>
 
-<!-- ================= ВАШИ КОШЕЛЬКИ (СКРЫТА ПО УМОЛЧАНИЮ) ================= -->
+<!-- ================= ВАШИ КОШЕЛЬКИ ================= -->
 <div class="container" id="walletsCardContainer" style="margin-bottom: 1rem; display: none;">
   <div class="card">
     <h2 style="font-size: 1.1rem; margin-top: 0; margin-bottom: 1rem; text-align: center;">
@@ -442,10 +445,21 @@ async function loadDashboard() {
 
             const tradesDiv = $('activeTradesList');
             if (state.active_trades && state.active_trades.length > 0) {
-                tradesDiv.innerHTML = state.active_trades.map(t => `
-                    <div class="trade-item ${t.breakeven ? 'breakeven' : ''}">
-                        <strong>Сделка от ${t.date}</strong><br>Вход: ${t.entry_price} | Стоп: ${t.stop_loss}
-                    </div>`).join('');
+                tradesDiv.innerHTML = state.active_trades.map(t => {
+                    const isPartial = t.closed_50;
+                    const partialHtml = isPartial ? '<span class="partial-badge">⚠️ 50% закрыто (ниже входа)</span>' : '';
+                    
+                    let itemClass = 'trade-item';
+                    if (t.breakeven) itemClass += ' breakeven';
+                    else if (isPartial) itemClass += ' partial';
+
+                    return `
+                    <div class="${itemClass}">
+                        <strong>Сделка от ${t.date}</strong> ${partialHtml}<br>
+                        Вход: ${t.entry_price} | Стоп: ${t.stop_loss} ${t.breakeven ? '(Безубыток)' : ''}
+                    </div>
+                    `;
+                }).join('');
             } else { tradesDiv.innerHTML = 'Нет активных сделок'; }
             if (state.status.includes('WAITING')) badge.classList.add('status-waiting');
         } else {
