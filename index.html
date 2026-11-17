@@ -56,35 +56,15 @@
   
   .trade-item { background: #131722; padding: 0.8rem; border-radius: 4px; margin-bottom: 0.5rem; border-left: 3px solid #f7a600; font-size: 0.9rem; }
   .trade-item.breakeven { border-left-color: #089981; }
-  .trade-item.partial { border-left-color: #f23645; } /* Красный цвет для частичного стопа */
+  .trade-item.partial { border-left-color: #f23645; }
 
   .partial-badge { display: inline-block; padding: 2px 6px; border-radius: 4px; font-size: 0.75rem; margin-left: 6px; background: #f2364533; color: #f23645; border: 1px solid #f23645; }
-
-  .stats-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 0.8rem; margin-top: 1rem; }
-  @media (min-width: 600px) { .stats-grid { grid-template-columns: repeat(4, 1fr); } }
-  
-  .stat-box { background: #131722; border: 1px solid #2a2e39; border-radius: 8px; padding: 1rem; text-align: center; }
-  .stat-title { font-size: 0.85rem; color: #787b86; margin-bottom: 0.5rem; }
-  .stat-num { font-size: 1.5rem; font-weight: 700; color: #089981; }
 
   .tx-link { color: #089981; text-decoration: none; border-bottom: 1px dashed #089981; }
   .tx-link:hover { color: #067a66; border-bottom: 1px solid #067a66; }
 </style>
 </head>
 <body>
-
-<!-- ================= ПЛИТКИ СТАТИСТИКИ ================= -->
-<div class="container" style="margin-bottom: 1rem;">
-  <div class="card">
-    <h2 style="font-size: 1.1rem; margin-top: 0; margin-bottom: 1rem; text-align: center;">
-      📊 Общая статистика сети BTC (24ч)
-    </h2>
-    <div class="stats-grid" id="statsGrid">
-      <div style="grid-column: 1 / -1; text-align: center; color: #787b86; padding: 1rem;">Загрузка...</div>
-    </div>
-    <p class="muted" id="statsStatus" style="margin-top: 1rem;"></p>
-  </div>
-</div>
 
 <!-- ================= ИСТОРИЯ ДНЕЙ ================= -->
 <div class="container" style="margin-bottom: 1rem;">
@@ -209,45 +189,6 @@ const tokenKey = 'gh_pat_bot_dashboard';
 
 let allHistory = [];
 let historyExpanded = false;
-
-/* ---------- Загрузка плиток ---------- */
-async function loadStats() {
-  const grid = $('statsGrid');
-  const statusEl = $('statsStatus');
-  
-  try {
-    const url = `https://raw.githubusercontent.com/${OWNER}/${REPO}/${BRANCH}/stats.json?t=${Date.now()}`;
-    const res = await fetch(url);
-    if (!res.ok) throw new Error('Файл еще не создан');
-    const data = await res.json();
-    const stats = data.stats || {};
-    
-    const cats = [
-      { key: "1", label: ">1 BTC" }, { key: "5", label: ">5 BTC" },
-      { key: "10", label: ">10 BTC" }, { key: "20", label: ">20 BTC" },
-      { key: "50", label: ">50 BTC" }, { key: "100", label: ">100 BTC" },
-      { key: "500", label: ">500 BTC" }, { key: "1000", label: ">1000 BTC" }
-    ];
-    
-    grid.innerHTML = cats.map(c => {
-      const count = stats[c.key] || 0;
-      let color = '#089981';
-      if (c.key >= "100") color = '#f7a600';
-      if (c.key >= "500") color = '#f23645';
-      return `
-        <div class="stat-box">
-          <div class="stat-title">${c.label}</div>
-          <div class="stat-num" style="color: ${color}">${count}</div>
-        </div>
-      `;
-    }).join('');
-    
-    statusEl.textContent = 'Обновлено: ' + new Date(data.updated_at).toLocaleString();
-  } catch (e) {
-    grid.innerHTML = `<div style="grid-column: 1 / -1; text-align: center; color: #f23645; padding: 1rem;">Ожидание данных...</div>`;
-    statusEl.textContent = '';
-  }
-}
 
 /* ---------- Загрузка истории ---------- */
 async function loadHistory() {
@@ -490,7 +431,6 @@ async function setBotState(enable) {
 }
 
 document.addEventListener('DOMContentLoaded', () => {
-    loadStats();
     loadHistory();
     loadWallets();
     initChart();
