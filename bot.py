@@ -87,31 +87,23 @@ def calculate_macd_signal(klines):
 def main():
     cfg = load_json(CONFIG_PATH, {"enabled": False})
     if not cfg.get("enabled"): return log("Бот выключен")
+    
     state = load_json(STATE_PATH, {})
     if "active_trades" not in state: state["active_trades"] = []
     if "status" not in state: state["status"] = "WAITING_NEXT_TRIGGER"
     if "macd_filter" not in state: state["macd_filter"] = True
     if "last_trigger_date" not in state: state["last_trigger_date"] = ""
-    save_json(STATE_PATH, state)
     
     now = datetime.now(timezone.utc).timestamp() * 1000
-    klines_4h = get_klines(SYMBOL, TF_4H, limit=100)
-    closed_4h = [k for k in klines_4h if k[6] < now]
-    if len(closed_4h) < 2: return log("Мало свечей")
-    
-    last_candle = closed_4h[-1]
-    open_time = datetime.fromtimestamp(last_candle[0]/1000, tz=timezone.utc)
-    close_time = datetime.fromtimestamp(last_candle[6]/1000, tz=timezone.utc)
-    high, low, close = float(last_candle[2]), float(last_candle[3]), float(last_candle[4])
-    log(f"Свеча (Открытие: {open_time:%H:%M}, Закрытие: {close_time:%H:%M}) | H: {high} | L: {low} | C: {close}")
 
-    # 1. ТРЕЙЛИНГ
-    if close_time.hour == 0 and state["active_trades"]:
-        klines_1d = get_klines(SYMBOL, TF_1D, limit=2)
+    # --- 1. ТРЕЙЛИНГ-СТОП (по дневным свечам) ---
+    if state["active_trades"]:
+        klines_1d = get_klines(SYMBOL, TF_1D, limit=3)
         closed_1d = [k for k in klines_1d if k[6] < now]
-        if closed_1d:
-            daily_low = float(closed_1d[-1][3])
-            new_sl = round(daily_low * 0.998, 2)
+        if len(closed_1d) >= 2:
+            prev_daily_low = float(closed_1d[-2][3])
+            new_sl = round(prev_daily_low * 0.998, 2)
+            
             for trade in state["active_trades"]:
                 if trade.get("breakeven", False): continue
                 entry, current_sl = trade["entry_price"], trade["stop_loss"]
@@ -125,46 +117,65 @@ def main():
                     send_telegram(msg); send_email("Трейлинг", msg)
             save_json(STATE_PATH, state)
 
-    # 2. СТОП
-    for trade in list(state["active_trades"]):
-        if low <= trade["stop_loss"]:
-            msg = f"🔴 СТОП-ЛОСС {trade['date']} на {trade['stop_loss']}"
-            send_telegram(msg); send_email("СТОП-ЛОСС", msg)
-            state["active_trades"].remove(trade)
-            state["macd_filter"] = False
-            save_json(STATE_PATH, state)
-            commit_files_to_repo(["bot_state.json"])
-
-    # 3. ТРИГГЕР (Свеча, открывшаяся в 12:00, закрывается в 16:00)
-    is_trigger_candle = (open_time.hour == 12)
-    trigger_date_str = open_time.strftime("%Y-%m-%d")
+    # --- 2. СТОП-ЛОСС (по 4h свечам) ---
+    klines_4h = get_klines(SYMBOL, TF_4H, limit=10)
+    closed_4h = [k for k in klines_4h if k[6] < now]
     
-    if is_trigger_candle and state["last_trigger_date"] != trigger_date_str:
+    for trade in list(state["active_trades"]):
+        for k in closed_4h:
+            low = float(k[3])
+            if low <= trade["stop_loss"]:
+                msg = f"🔴 СТОП-ЛОСС {trade['date']} на {trade['stop_loss']}"
+                send_telegram(msg); send_email("СТОП-ЛОСС", msg)
+                state["active_trades"].remove(trade)
+                state["macd_filter"] = False
+                save_json(STATE_PATH, state)
+                commit_files_to_repo(["bot_state.json"])
+                break
+
+    # --- 3. ТРИГГЕР (по ДНЕВНОЙ свече) ---
+    klines_1d = get_klines(SYMBOL, TF_1D, limit=100)
+    closed_1d = [k for k in klines_1d if k[6] < now]
+    
+    if len(closed_1d) < 2:
+        return log("Мало дневных свечей")
+        
+    last_daily = closed_1d[-1]
+    daily_open_time = datetime.fromtimestamp(last_daily[0]/1000, tz=timezone.utc)
+    daily_high = float(last_daily[2])
+    trigger_date_str = daily_open_time.strftime("%Y-%m-%d")
+
+    # Если это новая дневная свеча (которой еще не было в стейте)
+    if state["last_trigger_date"] != trigger_date_str:
         state["last_trigger_date"] = trigger_date_str
         
-        macd_signal = calculate_macd_signal(closed_4h)
+        macd_signal = calculate_macd_signal(closed_1d)
         condition_met = state["macd_filter"] and (macd_signal < 0) or not state["macd_filter"]
         
         if condition_met:
-            state["status"], state["trigger_high"], state["trigger_date"] = "WAITING_BREAKOUT", high, trigger_date_str
+            state["status"], state["trigger_high"], state["trigger_date"] = "WAITING_BREAKOUT", daily_high, trigger_date_str
             save_json(STATE_PATH, state)
-            msg = f"🔔 Триггер {trigger_date_str}: {high}\nMACD: {macd_signal:.4f}"
+            msg = f"🔔 Новый триггер (Дневная свеча {trigger_date_str}): {daily_high}\nMACD: {macd_signal:.4f}"
             send_telegram(msg); send_email("Триггер", msg)
         else:
             state["status"] = "WAITING_NEXT_TRIGGER"
             msg = f"⚠️ Триггер {trigger_date_str} отменен. MACD: {macd_signal:.4f}"
             send_telegram(msg); send_email("Отмена", msg)
             save_json(STATE_PATH, state)
+        # После установки/отмены триггера ждем следующего закрытия
         return
 
-    # 4. ВХОД
-    if state["status"] == "WAITING_BREAKOUT" and close > state["trigger_high"]:
+    # --- 4. ВХОД (проверяем по 4h свечам) ---
+    last_4h = closed_4h[-1]
+    high_4h, low_4h, close_4h = float(last_4h[2]), float(last_4h[3]), float(last_4h[4])
+
+    if state["status"] == "WAITING_BREAKOUT" and close_4h > state["trigger_high"]:
         state["status"] = "WAITING_RETEST"
         save_json(STATE_PATH, state)
         msg = f"🚀 ПРОБОЙ! {state['trigger_high']}"
         send_telegram(msg); send_email("Пробой", msg)
 
-    elif state["status"] == "WAITING_RETEST" and low <= state["trigger_high"]:
+    elif state["status"] == "WAITING_RETEST" and low_4h <= state["trigger_high"]:
         new_trade = {"date": state["trigger_date"], "entry_price": state["trigger_high"], "stop_loss": round(state["trigger_high"]*0.98, 2), "breakeven": False}
         state["active_trades"].append(new_trade)
         state["status"], state["macd_filter"] = "WAITING_NEXT_TRIGGER", True
