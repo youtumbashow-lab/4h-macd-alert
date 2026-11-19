@@ -44,6 +44,7 @@ WALLETS = [
     "bc1qukqenm2t85dhdta9glqehllglxznsu4qyxn790",
     "39ar1t39jDKT8Rahf7q9ucNEmanVSRdG9Z",
     "3GaFPkeKdDcCft6oKzB4XJuPJDUmTHE8cm",
+    "bc1q4zfy9u82u7jkq7sm5n5asrn5sc8wgl9nsa9z68",
     "16vYYR5uHkdoRW7XbVzrwjyXvVwWokpEao"
 ]
 
