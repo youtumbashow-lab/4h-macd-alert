@@ -431,9 +431,12 @@ async function setBotState(enable) {
 }
 
 document.addEventListener('DOMContentLoaded', () => {
+    // Сначала запускаем график, чтобы он точно загрузился
+    initChart();
+    
+    // Потом все остальные данные
     loadHistory();
     loadWallets();
-    initChart();
     updateTokenStatus();
     if (getToken()) loadDashboard();
 });
