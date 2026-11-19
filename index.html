@@ -4,8 +4,6 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
 <title>Breakout Bot Dashboard</title>
-<!-- Подключаем библиотеку для графика (работает из РФ без VPN) -->
-<script src="https://unpkg.com/lightweight-charts/dist/lightweight-charts.standalone.production.js"></script>
 <style>
   :root { color-scheme: dark; }
   * { box-sizing: border-box; }
@@ -22,14 +20,11 @@
   .btn-off { background: #f23645; color: #fff; }
   .btn-off:active { background: #c42b38; }
   .btn-disabled { opacity: 0.4; pointer-events: none; }
-  .btn-tf { background: #2a2e39; color: #d1d4dc; margin-right: 5px; padding: 5px 10px; font-size: 0.85rem; }
-  .btn-tf.active { background: #2b7cff; color: #fff; border-color: #2b7cff; }
   
   @media (max-width: 600px) {
     .btn-group { display: flex; flex-direction: column; gap: 0.5rem; width: 100%; margin-top: 1rem; }
     button { width: 100%; padding: 0.9rem; font-size: 1rem; }
     .row { justify-content: center; text-align: center; }
-    .btn-tf { width: auto; display: inline-block; }
   }
   
   .status-badge { padding: 0.4rem 0.8rem; border-radius: 20px; font-size: 0.85rem; font-weight: 600; display: inline-block; margin-top: 0.5rem; }
@@ -44,11 +39,11 @@
   .info-label { font-size: 0.75rem; color: #787b86; margin-bottom: 0.3rem; text-transform: uppercase; letter-spacing: 0.5px; }
   .info-value { font-size: 1.1rem; font-weight: 600; color: #fff; }
 
-  #tv_chart_container { 
+  .chart-container { 
     height: 500px; width: 100%; border-radius: 8px; overflow: hidden; 
     border: 1px solid #2a2e39; background: #131722;
   }
-  @media (min-width: 800px) { #tv_chart_container { height: 600px; } }
+  @media (min-width: 800px) { .chart-container { height: 600px; } }
   
   .token-area { display: flex; flex-direction: column; gap: 0.5rem; margin-top: 1rem; }
   @media (min-width: 600px) { .token-area { flex-direction: row; } }
@@ -166,17 +161,12 @@
     <p id="globalStatus" class="muted"></p>
   </div>
 
-  <!-- БЛОК С ГРАФИКОМ -->
   <div class="card">
-    <div class="row" style="justify-content: space-between; margin-bottom: 1rem;">
-      <h2 style="font-size: 1.1rem; margin: 0;">BTC/USDT</h2>
-      <div>
-        <button class="btn-tf active" onclick="changeTF('4h', this)">4H</button>
-        <button class="btn-tf" onclick="changeTF('1d', this)">1D</button>
-        <button class="btn-tf" onclick="changeTF('1w', this)">1W</button>
-      </div>
+    <h2 style="font-size: 1.1rem; margin-top: 0; margin-bottom: 1rem; text-align: center;">BTC/USDT (График)</h2>
+    <!-- ГРАФИК ОТ COINGECKO (НЕ БЛОКИРУЕТСЯ) -->
+    <div class="chart-container" style="display: flex; justify-content: center; align-items: center; background: #131722;">
+      <div id="gecko-chart" style="height: 100%; width: 100%;"></div>
     </div>
-    <div id="tv_chart_container"></div>
   </div>
 </div>
 
@@ -189,8 +179,11 @@
   ↑
 </button>
 
+<!-- Подключаем скрипт виджета CoinGecko -->
+<script src="https://widgets.coingecko.com/coingecko-coin-price-chart-widget.js"></script>
+
 <script>
-const OWNER  = 'youtumbashowlab'; // Обрати внимание, тут нет дефиса
+const OWNER  = 'youtumbashow-lab';
 const REPO   = '4h-macd-alert';
 const BRANCH = 'main';
 const CONFIG_PATH = 'bot_config.json';
@@ -202,68 +195,24 @@ const tokenKey = 'gh_pat_bot_dashboard';
 let allHistory = [];
 let historyExpanded = false;
 
-/* ---------- ГРАФИК (Lightweight Charts) ---------- */
-let chart = null;
-let candlestickSeries = null;
+/* ---------- Инициализация виджета CoinGecko ---------- */
+function initGeckoWidget() {
+    const container = $('gecko-chart');
+    if (!container) return;
 
-function initChart() {
-    const container = $('tv_chart_container');
-    container.innerHTML = ''; // Очистка
+    // Очищаем контейнер (на случай повторной загрузки)
+    container.innerHTML = '';
 
-    chart = LightweightCharts.createChart(container, {
-        width: container.clientWidth,
-        height: container.clientHeight,
-        layout: { background: { color: '#131722' }, textColor: '#d1d4dc' },
-        grid: { vertLines: { color: '#2a2e39' }, horzLines: { color: '#2a2e39' } },
-        crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
-        rightPriceScale: { borderColor: '#2a2e39' },
-        timeScale: { borderColor: '#2a2e39' }
-    });
-
-    candlestickSeries = chart.addCandlestickSeries({
-        upColor: '#089981', downColor: '#f23645', borderVisible: false,
-        wickUpColor: '#089981', wickDownColor: '#f23645'
-    });
-
-    // Подгружаем данные 4h по умолчанию
-    loadChartData('4h');
-
-    // Ресайз графика при изменении окна
-    window.addEventListener('resize', () => {
-        chart.applyOptions({ width: container.clientWidth });
-    });
-}
-
-async function loadChartData(interval) {
-    try {
-        // Берем данные с публичного API Binance (не блокируется)
-        const res = await fetch(`https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=${interval}&limit=200`);
-        const data = await res.json();
-        
-        // Преобразуем формат Binance в формат Lightweight Charts
-        const cdata = data.map(d => ({
-            time: d[0] / 1000, // время в секундах
-            open: parseFloat(d[1]),
-            high: parseFloat(d[2]),
-            low: parseFloat(d[3]),
-            close: parseFloat(d[4])
-        }));
-        
-        candlestickSeries.setData(cdata);
-        chart.timeScale().fitContent();
-    } catch (e) {
-        console.error('Ошибка загрузки графика:', e);
-        container.innerHTML = '<p style="color:red; text-align:center; padding:20px;">Ошибка загрузки графика</p>';
-    }
-}
-
-function changeTF(interval, btn) {
-    // Меняем активную кнопку
-    document.querySelectorAll('.btn-tf').forEach(b => b.classList.remove('active'));
-    btn.classList.add('active');
+    // Создаем элемент виджета
+    const widget = document.createElement('coingecko-coin-price-chart-widget');
+    widget.setAttribute('coin-id', 'bitcoin');
+    widget.setAttribute('currency', 'usd');
+    widget.setAttribute('height', '500');
+    widget.setAttribute('locale', 'ru');
+    widget.setAttribute('background-color', '#131722');
+    widget.setAttribute('font-color', '#d1d4dc');
     
-    // Загружаем новые данные
-    loadChartData(interval);
+    container.appendChild(widget);
 }
 
 /* ---------- Загрузка истории ---------- */
@@ -493,7 +442,7 @@ async function setBotState(enable) {
 }
 
 document.addEventListener('DOMContentLoaded', () => {
-    initChart();
+    initGeckoWidget();
     loadHistory();
     loadWallets();
     updateTokenStatus();
