@@ -163,12 +163,10 @@ def main():
         if condition_met:
             state["status"], state["trigger_high"], state["trigger_date"] = "WAITING_BREAKOUT", daily_high, trigger_date_str
             save_json(STATE_PATH, state)
-            msg = f"🔔 Новый триггер (Дневная свеча {trigger_date_str}): {daily_high}\nMACD: {macd_signal:.4f}"
-            send_telegram(msg); send_email("Триггер", msg)
+            log(f"Новый триггер установлен: {daily_high}") # В лог пишем, в ТГ не шлем
         else:
             state["status"] = "WAITING_NEXT_TRIGGER"
-            msg = f"⚠️ Триггер {trigger_date_str} отменен. MACD: {macd_signal:.4f}"
-            send_telegram(msg); send_email("Отмена", msg)
+            log(f"Триггер отменен (MACD > 0)")
             save_json(STATE_PATH, state)
         return
 
@@ -185,11 +183,11 @@ def main():
             "entry_price": state["trigger_high"], 
             "stop_loss": round(state["trigger_high"]*0.98, 2), 
             "breakeven": False,
-            "closed_50": False # <--- НОВОЕ ПОЛЕ
+            "closed_50": False
         }
         state["active_trades"].append(new_trade)
         state["status"], state["macd_filter"] = "WAITING_NEXT_TRIGGER", True
-        msg = f"🟢 БАЙ {new_trade['entry_price']}, SL {new_trade['stop_loss']}"
+        msg = f"🟢 СДЕЛКА БАЙ {new_trade['entry_price']}, SL {new_trade['stop_loss']}"
         send_telegram(msg); send_email("БАЙ", msg)
         del state["trigger_high"], state["trigger_date"]
         save_json(STATE_PATH, state)
