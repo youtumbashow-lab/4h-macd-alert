@@ -164,14 +164,8 @@
   <div class="card">
     <h2 style="font-size: 1.1rem; margin-top: 0; margin-bottom: 1rem; text-align: center;">BTC/USDT (График)</h2>
     <!-- ГРАФИК ОТ COINGECKO (НЕ БЛОКИРУЕТСЯ) -->
-    <div class="chart-container">
-      <iframe 
-        src="https://www.coingecko.com/ru/coins/bitcoin/embed?locale=ru"
-        style="width: 100%; height: 100%; border: none;"
-        frameborder="0"
-        allowtransparency="true"
-        scrolling="no">
-      </iframe>
+    <div class="chart-container" style="display: flex; justify-content: center; align-items: center; background: #131722;">
+      <div id="gecko-chart" style="height: 100%; width: 100%;"></div>
     </div>
   </div>
 </div>
@@ -185,6 +179,9 @@
   ↑
 </button>
 
+<!-- Подключаем скрипт виджета CoinGecko -->
+<script src="https://widgets.coingecko.com/coingecko-coin-price-chart-widget.js"></script>
+
 <script>
 const OWNER  = 'youtumbashow-lab';
 const REPO   = '4h-macd-alert';
@@ -197,6 +194,26 @@ const tokenKey = 'gh_pat_bot_dashboard';
 
 let allHistory = [];
 let historyExpanded = false;
+
+/* ---------- Инициализация виджета CoinGecko ---------- */
+function initGeckoWidget() {
+    const container = $('gecko-chart');
+    if (!container) return;
+
+    // Очищаем контейнер (на случай повторной загрузки)
+    container.innerHTML = '';
+
+    // Создаем элемент виджета
+    const widget = document.createElement('coingecko-coin-price-chart-widget');
+    widget.setAttribute('coin-id', 'bitcoin');
+    widget.setAttribute('currency', 'usd');
+    widget.setAttribute('height', '500');
+    widget.setAttribute('locale', 'ru');
+    widget.setAttribute('background-color', '#131722');
+    widget.setAttribute('font-color', '#d1d4dc');
+    
+    container.appendChild(widget);
+}
 
 /* ---------- Загрузка истории ---------- */
 async function loadHistory() {
@@ -425,6 +442,7 @@ async function setBotState(enable) {
 }
 
 document.addEventListener('DOMContentLoaded', () => {
+    initGeckoWidget();
     loadHistory();
     loadWallets();
     updateTokenStatus();
