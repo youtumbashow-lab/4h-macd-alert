@@ -2,7 +2,7 @@
   "active_trades": [],
   "status": "WAITING_BREAKOUT",
   "macd_filter": true,
-  "last_trigger_date": "2026-11-20",
-  "trigger_high": 62639.52,
-  "trigger_date": "2026-11-20"
+  "last_trigger_date": "2026-11-21",
+  "trigger_high": 60996.0,
+  "trigger_date": "2026-11-21"
 }
