@@ -1,8 +1,14 @@
 {
-  "active_trades": [],
-  "status": "WAITING_RETEST",
-  "macd_filter": false,
-  "last_trigger_date": "2026-11-22",
-  "trigger_high": 61669.99,
-  "trigger_date": "2026-11-22"
+  "active_trades": [
+    {
+      "date": "2026-11-22",
+      "entry_price": 61669.99,
+      "stop_loss": 60436.59,
+      "breakeven": false,
+      "closed_50": false
+    }
+  ],
+  "status": "WAITING_NEXT_TRIGGER",
+  "macd_filter": true,
+  "last_trigger_date": "2026-11-22"
 }
