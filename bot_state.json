@@ -1,13 +1,6 @@
 {
   "active_trades": [
     {
-      "date": "2026-11-25",
-      "entry_price": 60568.01,
-      "stop_loss": 59356.65,
-      "breakeven": false,
-      "closed_50": true
-    },
-    {
       "date": "2026-11-26",
       "entry_price": 61622.38,
       "stop_loss": 60389.93,
@@ -16,6 +9,6 @@
     }
   ],
   "status": "WAITING_NEXT_TRIGGER",
-  "macd_filter": true,
+  "macd_filter": false,
   "last_trigger_date": "2026-11-26"
 }
