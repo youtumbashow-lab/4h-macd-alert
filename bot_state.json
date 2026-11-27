@@ -8,7 +8,9 @@
       "closed_50": true
     }
   ],
-  "status": "WAITING_NEXT_TRIGGER",
+  "status": "WAITING_BREAKOUT",
   "macd_filter": true,
-  "last_trigger_date": "2026-11-25"
+  "last_trigger_date": "2026-11-26",
+  "trigger_high": 61622.38,
+  "trigger_date": "2026-11-26"
 }
