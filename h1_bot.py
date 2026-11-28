@@ -189,7 +189,9 @@ def main():
         klines_1h = get_klines(SYMBOL, TF_1H, limit=48)
     except Exception as e:
         return log(f"Не удалось получить 1h: {e}")
+    # Берем все свечи за сегодня (включая текущую формирующуюся)
     today_1h = [k for k in klines_1h if _date_from_ms(_open_ms(k)) == today_utc]
+    # Отдельно берем закрытые (нужны для расчета стопов и закрытия сделок)
     closed_1h = [k for k in today_1h if _close_ms(k) < now_ms]
 
     # ============================================================
@@ -211,7 +213,8 @@ def main():
             a, b = pair
             b_close_sec = _close_ms(b) / 1000
             dt = b_close_sec - now_sec
-            if 0 < dt <= 15 * 60:
+            # Отправляем, если осталось <= 15 минут, ИЛИ если свеча уже закрылась (cron опоздал)
+            if dt <= 15 * 60:
                 notify("2 свечи Buy (H1)", "⏰ 2 свечи Buy (H1)")
                 state["h1_buy_signal_sent_date"] = today_str
                 state["h1_pending_pair"] = {
