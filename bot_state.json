@@ -1,6 +1,8 @@
 {
   "active_trades": [],
-  "status": "WAITING_NEXT_TRIGGER",
+  "status": "WAITING_BREAKOUT",
   "macd_filter": false,
-  "last_trigger_date": "2026-11-26"
+  "last_trigger_date": "2026-11-27",
+  "trigger_high": 62248.91,
+  "trigger_date": "2026-11-27"
 }
