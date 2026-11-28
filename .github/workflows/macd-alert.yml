@@ -2,8 +2,6 @@ name: MACD Alert
 
 on:
   workflow_dispatch:          # ручной запуск (и вызов через cron-job.org)
-  # schedule:
-  #   - cron: '1 */4 * * *'
 
 permissions:
   contents: write
@@ -21,15 +19,7 @@ jobs:
       - name: Установка зависимостей
         run: pip install --quiet requests pandas
 
-      # 1. Твой старый MACD алерт
-      - name: Проверка MACD и отправка email
-        env:
-          EMAIL_TO: ${{ secrets.EMAIL_TO }}
-          EMAIL_USER: ${{ secrets.EMAIL_USER }}
-          EMAIL_APP_PASSWORD: ${{ secrets.EMAIL_APP_PASSWORD }}
-        run: python macd_alert.py
-
-      # 2. НОВОЕ: Запуск бота пробоя (дневной)
+      # 1. Запуск основного бота пробоя (bot.py)
       - name: Запуск основного бота (bot.py)
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
@@ -39,7 +29,7 @@ jobs:
           EMAIL_APP_PASSWORD: ${{ secrets.EMAIL_APP_PASSWORD }}
         run: python bot.py
 
-      # 3. НОВОЕ: Запуск H1-бота
+      # 2. Запуск H1-бота (h1_bot.py)
       - name: Запуск H1-бота (h1_bot.py)
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
@@ -49,15 +39,15 @@ jobs:
           EMAIL_APP_PASSWORD: ${{ secrets.EMAIL_APP_PASSWORD }}
         run: python h1_bot.py
 
-      # 4. Сохранение всех состояний
+      # 3. Сохранение состояний
       - name: Сохранить состояния в репозиторий
         if: always()
         run: |
           git config user.name "macd-bot"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           
-          # Добавляем все файлы состояний, если они есть
-          git add state.json bot_state.json h1_bot_state.json 2>/dev/null || true
+          # Сохраняем только стейты ботов (state.json от macd_alert больше не нужен)
+          git add bot_state.json h1_bot_state.json 2>/dev/null || true
           
           if git diff --cached --quiet; then
             echo "Изменений нет"
