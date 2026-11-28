@@ -4,7 +4,6 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
 <title>Breakout Bot Dashboard</title>
-<!-- ЖЕСТКО УКАЗЫВАЕМ ВЕРСИЮ 4.1.3 (в ней работает старый синтаксис) -->
 <script src="https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
 <style>
   :root { color-scheme: dark; }
@@ -67,6 +66,8 @@
 
   .tx-link { color: #089981; text-decoration: none; border-bottom: 1px dashed #089981; }
   .tx-link:hover { color: #067a66; border-bottom: 1px solid #067a66; }
+  
+  .divider { border-top: 1px solid #2a2e39; margin: 1.5rem 0; }
 </style>
 </head>
 <body>
@@ -132,8 +133,9 @@
   <h1>Breakout Bot Dashboard</h1>
 
   <div class="card">
+    <!-- Основной бот -->
     <div class="row" style="justify-content: center; text-align: center;">
-      <span style="font-size: 1rem; font-weight: 600;">Статус бота:</span>
+      <span style="font-size: 1rem; font-weight: 600;">Статус основного бота:</span>
       <span id="botStatusBadge" class="status-badge status-inactive">Загрузка...</span>
     </div>
     
@@ -141,11 +143,25 @@
       <button id="btnEnable" class="btn-on" onclick="setBotState(true)">Включить бота</button>
       <button id="btnDisable" class="btn-off" onclick="setBotState(false)">Отключить бота</button>
     </div>
+
+    <div class="divider"></div>
+
+    <!-- H1 Бот -->
+    <div class="row" style="justify-content: center; text-align: center;">
+      <span style="font-size: 1rem; font-weight: 600;">Статус H1-бота (2 свечи Buy):</span>
+      <span id="h1StatusBadge" class="status-badge status-inactive">Загрузка...</span>
+    </div>
     
+    <div class="btn-group">
+      <button id="btnH1Enable" class="btn-on" onclick="setH1State(true)">Включить H1</button>
+      <button id="btnH1Disable" class="btn-off" onclick="setH1State(false)">Отключить H1</button>
+    </div>
+    
+    <!-- Информация о работе ботов -->
     <div id="botInfo" style="display: none; margin-top: 1rem;">
       <div class="info-grid">
         <div class="info-item">
-          <div class="info-label">Текущий статус</div>
+          <div class="info-label">Текущий статус (Дневной)</div>
           <div class="info-value" id="infoState">-</div>
         </div>
         <div class="info-item" id="triggerInfo" style="display: none;">
@@ -154,8 +170,12 @@
         </div>
       </div>
       
-      <h3 style="margin-top: 1.5rem; font-size: 1rem; color: #fff; margin-bottom: 0.5rem;">Активные сделки:</h3>
+      <h3 style="margin-top: 1.5rem; font-size: 1rem; color: #fff; margin-bottom: 0.5rem;">Активные сделки (Дневные):</h3>
       <div id="activeTradesList" class="muted" style="text-align: left;">Нет активных сделок</div>
+
+      <h3 style="margin-top: 1.5rem; font-size: 1rem; color: #fff; margin-bottom: 0.5rem;">H1-сделки (2 свечи Buy):</h3>
+      <div id="h1PendingInfo" class="muted" style="display: none; text-align: left; margin-bottom: 0.5rem; border-left: 3px solid #f7a600; padding-left: 8px;"></div>
+      <div id="h1ActiveTradesList" class="muted" style="text-align: left;">Нет активных H1-сделок</div>
     </div>
     
     <div class="token-area">
@@ -195,6 +215,8 @@ const REPO   = '4h-macd-alert';
 const BRANCH = 'main';
 const CONFIG_PATH = 'bot_config.json';
 const STATE_PATH  = 'bot_state.json';
+const H1_CONFIG_PATH = 'h1_bot_config.json';
+const H1_STATE_PATH  = 'h1_bot_state.json';
 
 const $ = id => document.getElementById(id);
 const tokenKey = 'gh_pat_bot_dashboard';
@@ -417,13 +439,23 @@ async function loadDashboard() {
     if (!getToken()) {
         $('botStatusBadge').textContent = 'Нет токена';
         $('botStatusBadge').className = 'status-badge status-inactive';
+        $('h1StatusBadge').textContent = 'Нет токена';
+        $('h1StatusBadge').className = 'status-badge status-inactive';
         return;
     }
     try {
+        // Загружаем конфиги и стейты
         const { data: cfg } = await getFile(CONFIG_PATH);
-        const enabled = cfg ? cfg.enabled : false;
+        const { data: h1cfg } = await getFile(H1_CONFIG_PATH);
+        const { data: state } = await getFile(STATE_PATH);
+        const { data: h1state } = await getFile(H1_STATE_PATH);
+
+        const masterEnabled = cfg ? cfg.enabled === true : false;
+        const h1Enabled = h1cfg ? h1cfg.enabled === true : false;
+
+        // --- Основной бот ---
         const badge = $('botStatusBadge');
-        if (enabled) {
+        if (masterEnabled) {
             badge.textContent = 'ВКЛЮЧЕН'; badge.className = 'status-badge status-active';
             $('btnEnable').classList.add('btn-disabled'); $('btnDisable').classList.remove('btn-disabled');
         } else {
@@ -431,20 +463,43 @@ async function loadDashboard() {
             $('btnEnable').classList.remove('btn-disabled'); $('btnDisable').classList.add('btn-disabled');
         }
 
-        const { data: state } = await getFile(STATE_PATH);
+        // --- H1 Бот ---
+        const h1Badge = $('h1StatusBadge');
+        if (h1Enabled) {
+            h1Badge.textContent = 'ВКЛЮЧЕН'; h1Badge.className = 'status-badge status-active';
+            $('btnH1Enable').classList.add('btn-disabled'); $('btnH1Disable').classList.remove('btn-disabled');
+        } else {
+            h1Badge.textContent = 'ВЫКЛЮЧЕН'; h1Badge.className = 'status-badge status-inactive';
+            $('btnH1Enable').classList.remove('btn-disabled'); $('btnH1Disable').classList.add('btn-disabled');
+        }
+
+        // Если мастер-бот выключен, H1-кнопки тоже блокируем (мастер-флаг)
+        if (!masterEnabled) {
+            $('btnH1Enable').classList.add('btn-disabled');
+            $('btnH1Disable').classList.add('btn-disabled');
+            h1Badge.textContent = 'Мастер-бот выкл.';
+            h1Badge.className = 'status-badge status-inactive';
+        }
+
+        // --- Инфо о состоянии ---
         if (state && state.status) {
             $('botInfo').style.display = 'block';
-            const statusMap = { "WAITING_NEXT_TRIGGER": "Ждет триггер", "WAITING_BREAKOUT": "Ждет пробоя", "WAITING_RETEST": "Ждет ретеста", "IN_TRADE": "В сделке" };
+            const statusMap = { 
+                "WAITING_NEXT_TRIGGER": "Ждет триггер", 
+                "WAITING_BREAKOUT": "Ждет пробоя", 
+                "WAITING_RETEST": "Ждет ретеста", 
+                "IN_TRADE": "В сделке" 
+            };
             $('infoState').textContent = statusMap[state.status] || state.status;
             if (state.trigger_high) { $('triggerInfo').style.display = 'block'; $('infoLevel').textContent = state.trigger_high; } 
             else { $('triggerInfo').style.display = 'none'; }
 
+            // Дневные сделки
             const tradesDiv = $('activeTradesList');
             if (state.active_trades && state.active_trades.length > 0) {
                 tradesDiv.innerHTML = state.active_trades.map(t => {
                     const isPartial = t.closed_50;
-                    const partialHtml = isPartial ? '<span class="partial-badge">⚠️ 50% закрыто (ниже входа)</span>' : '';
-                    
+                    const partialHtml = isPartial ? '<span class="partial-badge">⚠️ 50% закрыто</span>' : '';
                     let itemClass = 'trade-item';
                     if (t.breakeven) itemClass += ' breakeven';
                     else if (isPartial) itemClass += ' partial';
@@ -460,10 +515,46 @@ async function loadDashboard() {
             if (state.status.includes('WAITING')) badge.classList.add('status-waiting');
         } else {
             $('botInfo').style.display = 'block';
-            $('infoState').textContent = 'Ожидание первого запуска бота';
+            $('infoState').textContent = 'Ожидание первого запуска';
             $('triggerInfo').style.display = 'none';
             $('activeTradesList').innerHTML = 'Нет активных сделок';
         }
+
+        // --- H1 Стейт (Pending и сделки) ---
+        if (h1state) {
+            const h1PendingDiv = $('h1PendingInfo');
+            const h1TradesDiv = $('h1ActiveTradesList');
+
+            // Ожидание закрытия второй свечи
+            if (h1state.h1_pending_pair) {
+                const p = h1state.h1_pending_pair;
+                // sl_b может быть промежуточным, поэтому показываем приблизительный минимум
+                const approxSL = Math.min(p.sl_a, p.sl_b).toFixed(2);
+                h1PendingDiv.style.display = 'block';
+                h1PendingDiv.innerHTML = `⏰ <b>Ожидает закрытия 2-й свечи</b><br>Вход (approx): ${p.entry} | SL (approx): ${approxSL}`;
+            } else {
+                h1PendingDiv.style.display = 'none';
+            }
+
+            // Активные H1-сделки
+            if (h1state.h1_active_trades && h1state.h1_active_trades.length > 0) {
+                h1TradesDiv.innerHTML = h1state.h1_active_trades.map(t => {
+                    const isPartial = t.closed_50;
+                    const partialHtml = isPartial ? '<span class="partial-badge">✂️ 50% закрыто</span>' : '';
+                    let itemClass = 'trade-item';
+                    if (isPartial) itemClass += ' partial';
+
+                    return `
+                      <div class="${itemClass}">
+                        <strong>H1 сделка от ${t.date}</strong> ${partialHtml}<br>
+                        Вход: ${t.entry_price} | Стоп: ${t.stop_loss}
+                      </div>`;
+                }).join('');
+            } else {
+                h1TradesDiv.innerHTML = 'Нет активных H1-сделок';
+            }
+        }
+
         $('globalStatus').textContent = 'Обновлено: ' + new Date().toLocaleTimeString();
         $('globalStatus').className = 'ok';
     } catch (e) {
@@ -478,8 +569,23 @@ async function setBotState(enable) {
     const originalText = btn.textContent;
     btn.textContent = '...'; btn.disabled = true;
     try {
-        const { sha } = await getFile(CONFIG_PATH);
-        await putFile(CONFIG_PATH, { enabled: enable }, sha, enable ? 'Bot enabled' : 'Bot disabled');
+        const { sha, data: cfg } = await getFile(CONFIG_PATH);
+        const newCfg = { ...(cfg || {}), enabled: enable };
+        await putFile(CONFIG_PATH, newCfg, sha, enable ? 'Bot enabled' : 'Bot disabled');
+        await loadDashboard();
+    } catch (e) { alert('Ошибка: ' + e.message); } 
+    finally { btn.textContent = originalText; btn.disabled = false; }
+}
+
+async function setH1State(enable) {
+    if (!getToken()) return alert('Сначала введите токен!');
+    const btn = enable ? $('btnH1Enable') : $('btnH1Disable');
+    const originalText = btn.textContent;
+    btn.textContent = '...'; btn.disabled = true;
+    try {
+        const { sha, data: cfg } = await getFile(H1_CONFIG_PATH);
+        const newCfg = { ...(cfg || {}), enabled: enable };
+        await putFile(H1_CONFIG_PATH, newCfg, sha, enable ? 'H1 enabled' : 'H1 disabled');
         await loadDashboard();
     } catch (e) { alert('Ошибка: ' + e.message); } 
     finally { btn.textContent = originalText; btn.disabled = false; }
